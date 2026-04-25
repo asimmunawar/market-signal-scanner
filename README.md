@@ -50,6 +50,8 @@ output/
 ```text
 market-signal-scanner.py        # CLI launcher
 main.py                         # alternate launcher
+run_app.sh                      # one-command macOS/local launcher
+Market Signal Scanner.command   # double-click macOS launcher
 config.example.yaml             # public example config
 config.yaml                     # local editable config
 requirements.txt
@@ -66,7 +68,37 @@ market_signal_scanner/
   charting.py                   # technical chart and chart report generation
 ```
 
-## Installation
+## macOS Quick Start
+
+For the easiest local setup on a Mac, use one of the launchers included in the repo.
+
+Double-click:
+
+```text
+Market Signal Scanner.command
+```
+
+Or run from Terminal:
+
+```bash
+./run_app.sh
+```
+
+The launcher will:
+
+- create `.venv` if it does not exist
+- install or update dependencies from `requirements.txt`
+- create `config.yaml` from `config.example.yaml` if needed
+- start the local GUI server
+- open `http://127.0.0.1:8000` in your browser
+
+If macOS says the command file is not allowed to run, enable execution once:
+
+```bash
+chmod +x run_app.sh "Market Signal Scanner.command"
+```
+
+## Manual Installation
 
 Requires Python 3.9+.
 
@@ -86,7 +118,7 @@ cp config.example.yaml config.yaml
 
 Then edit `config.yaml` with your tickers and settings.
 
-## Run The GUI
+## Run The GUI Manually
 
 ```bash
 python -m market_signal_scanner.api.server
