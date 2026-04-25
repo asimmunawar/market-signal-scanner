@@ -49,7 +49,6 @@ output/
 
 ```text
 market-signal-scanner.py        # CLI launcher
-market_scanner.py               # compatibility launcher
 main.py                         # alternate launcher
 config.example.yaml             # public example config
 config.yaml                     # local editable config
@@ -236,7 +235,7 @@ __pycache__/
 Suggested first commit:
 
 ```bash
-git add .gitignore LICENSE README.md requirements.txt config.example.yaml config.yaml main.py market-signal-scanner.py market_scanner.py market_signal_scanner
+git add .gitignore LICENSE README.md requirements.txt config.example.yaml config.yaml main.py market-signal-scanner.py market_signal_scanner
 git commit -m "Initial market signal scanner app"
 ```
 
