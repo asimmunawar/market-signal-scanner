@@ -57,7 +57,7 @@ config.yaml                     # local editable config
 requirements.txt
 market_signal_scanner/
   api/server.py                 # FastAPI GUI backend
-  web/                          # local browser UI assets
+  web/                          # local browser UI and app icon assets
   cli.py                        # scan/backtest/chart command routing
   config_loader.py              # YAML config parsing and group expansion
   data_fetcher.py               # yfinance downloads and local cache
@@ -97,6 +97,8 @@ If macOS says the command file is not allowed to run, enable execution once:
 ```bash
 chmod +x run_app.sh "Market Signal Scanner.command"
 ```
+
+App icons live in `market_signal_scanner/web/assets/` and are used by the browser favicon, Apple touch icon, and GUI sidebar. The included `.icns` asset is ready for future `.app` packaging. A double-click `.command` file can have a custom Finder icon locally, but that icon metadata is not reliably preserved by GitHub.
 
 ## Manual Installation
 

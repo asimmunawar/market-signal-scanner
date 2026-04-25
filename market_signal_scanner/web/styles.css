@@ -31,8 +31,9 @@ button, input, select, textarea { font: inherit; }
 .brand { display: flex; gap: 12px; align-items: center; margin-bottom: 28px; }
 .brand-mark {
   width: 44px; height: 44px; border-radius: 8px;
-  background: #2dd4bf; color: #062b28; display: grid; place-items: center;
-  font-weight: 800;
+  object-fit: cover; display: block;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
 }
 .brand h1 { font-size: 17px; margin: 0; letter-spacing: 0; }
 .brand p { margin: 2px 0 0; color: #aab5c0; font-size: 13px; }
