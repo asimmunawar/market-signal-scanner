@@ -21,6 +21,7 @@
       <nav class="nav">
         <button class="nav-button active" data-tab="run">Run</button>
         <button class="nav-button" data-tab="chart">Chart</button>
+        <button class="nav-button" data-tab="agent">Agent</button>
         <button class="nav-button" data-tab="outputs">Outputs</button>
         <button class="nav-button" data-tab="config">Config</button>
         <button class="nav-button" data-tab="jobs">Jobs</button>
@@ -90,6 +91,23 @@
         <section id="chartPreview" class="panel preview empty">No chart generated in this session yet.</section>
       </section>
 
+      <section id="tab-agent" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Agent Research</h2>
+            <p>Research a ticker with market signals, fundamentals, recent news, and a configurable local LLM.</p>
+          </div>
+        </div>
+        <section class="panel">
+          <div class="form-grid agent-form">
+            <label>Ticker<input id="agentTicker" value="AAPL" /></label>
+          </div>
+          <button id="runAgent" class="primary">Run Agent</button>
+          <p class="hint">Writes to <code>output/agents/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. LLM settings live in <code>config.yaml</code>.</p>
+        </section>
+        <section id="agentPreview" class="panel preview empty">No agent report generated in this session yet.</section>
+      </section>
+
       <section id="tab-outputs" class="tab">
         <div class="page-head">
           <div>
@@ -102,6 +120,7 @@
           <section class="panel"><h3>Scans</h3><div id="scanRuns" class="run-list"></div></section>
           <section class="panel"><h3>Backtests</h3><div id="backtestRuns" class="run-list"></div></section>
           <section class="panel"><h3>Charts</h3><div id="chartRuns" class="run-list"></div></section>
+          <section class="panel"><h3>Agents</h3><div id="agentRuns" class="run-list"></div></section>
         </div>
         <section class="panel viewer-panel">
           <div class="panel-title-row"><h3>Preview</h3><a id="downloadLink" class="download" href="#" target="_blank">Open file</a></div>

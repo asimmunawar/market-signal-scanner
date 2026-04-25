@@ -203,3 +203,31 @@ backtest:
   # and make SMA/RSI/MACD windows mean bars, not days.
   price_interval: "1d"
   price_period: "max"
+
+# Ticker research agent settings. Run from the GUI Agent tab or:
+# python market-signal-scanner.py agent --ticker AAPL --config config.yaml --output ./output
+agent:
+  # Default is local Ollama, so no cloud API key is required.
+  provider: "ollama"
+
+  # Ollama model name. Pull/start this model locally before using the LLM path:
+  # ollama pull gpt-oss:120b
+  model: "gpt-oss:120b"
+
+  # Local Ollama server URL.
+  base_url: "http://127.0.0.1:11434"
+
+  # Lower = more conservative and repeatable.
+  temperature: 0.2
+
+  # Seconds to wait for the local LLM response.
+  timeout_seconds: 180
+
+  # Max news/source items to collect before summarizing.
+  max_news_items: 12
+
+  # Google News RSS lookback window for query freshness.
+  news_lookback_days: 21
+
+  # Include yfinance fundamentals in the research packet when available.
+  include_fundamentals: true

@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
+from market_signal_scanner.agent_researcher import run_agent_research
 from market_signal_scanner.backtester import run_backtest
 from market_signal_scanner.charting import ChartOptions, generate_chart_report
 from market_signal_scanner.config_loader import load_config, resolve_ticker_universe
@@ -22,13 +23,13 @@ LOGGER = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan markets and backtest scanner rules.")
-    parser.add_argument("command", nargs="?", choices=["scan", "backtest", "chart"], default="scan", help="Run a current scan, historical backtest, or ticker chart.")
+    parser.add_argument("command", nargs="?", choices=["scan", "backtest", "chart", "agent"], default="scan", help="Run a current scan, historical backtest, ticker chart, or ticker research agent.")
     parser.add_argument("--config", default="config.yaml", help="Path to YAML configuration file.")
     parser.add_argument("--output", default="./output", help="Base output directory.")
     parser.add_argument("--skip-fundamentals", action="store_true", help="Skip fundamentals for this run.")
     parser.add_argument("--fast-mode", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
-    parser.add_argument("--ticker", help="Ticker to chart, for example AAPL or BTC-USD.")
+    parser.add_argument("--ticker", help="Ticker to chart or research, for example AAPL or BTC-USD.")
     parser.add_argument("--period", help="Chart/download period override, for example 6mo, 2y, 5y.")
     parser.add_argument("--interval", help="Chart/download interval override, for example 1d, 1h, 1wk.")
     parser.add_argument("--chart-type", default="candle", choices=["candle", "line"], help="Chart style for price panel.")
@@ -54,6 +55,8 @@ def main() -> int:
         return run_backtest_command(config, args)
     if args.command == "chart":
         return run_chart_command(config, args)
+    if args.command == "agent":
+        return run_agent_command(config, args)
     return run_scan_command(config, args)
 
 
@@ -175,6 +178,17 @@ def run_chart_command(config, args: argparse.Namespace) -> int:
     LOGGER.info("Wrote chart outputs to %s", result.output_dir.resolve())
     LOGGER.info("Chart: %s", result.chart_path.resolve())
     LOGGER.info("Report: %s", result.report_path.resolve())
+    return 0
+
+
+def run_agent_command(config, args: argparse.Namespace) -> int:
+    if not args.ticker:
+        LOGGER.error("--ticker is required for agent mode")
+        return 2
+    result = run_agent_research(args.ticker, config, args.output)
+    LOGGER.info("Wrote agent outputs to %s", result.output_dir.resolve())
+    LOGGER.info("Report: %s", result.report_path.resolve())
+    LOGGER.info("Sources: %s", result.sources_path.resolve())
     return 0
 
 

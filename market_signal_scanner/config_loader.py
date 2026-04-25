@@ -63,12 +63,25 @@ class BacktestConfig:
 
 
 @dataclass(frozen=True)
+class AgentConfig:
+    provider: str = "ollama"
+    model: str = "gpt-oss:120b"
+    base_url: str = "http://127.0.0.1:11434"
+    temperature: float = 0.2
+    timeout_seconds: int = 180
+    max_news_items: int = 12
+    news_lookback_days: int = 21
+    include_fundamentals: bool = True
+
+
+@dataclass(frozen=True)
 class ScannerConfig:
     tickers: list[str] = field(default_factory=list)
     groups: dict[str, bool] = field(default_factory=dict)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
 
 
 def load_config(path: str | Path) -> ScannerConfig:
@@ -82,6 +95,7 @@ def load_config(path: str | Path) -> ScannerConfig:
     limits = raw.get("limits") or {}
     runtime = raw.get("runtime") or {}
     backtest = raw.get("backtest") or {}
+    agent = raw.get("agent") or {}
 
     return ScannerConfig(
         tickers=[normalize_ticker(t) for t in raw.get("tickers", []) if t],
@@ -115,6 +129,16 @@ def load_config(path: str | Path) -> ScannerConfig:
             benchmark=str(backtest.get("benchmark", "SPY")).strip().upper(),
             price_interval=str(backtest.get("price_interval", runtime.get("price_interval", "1d"))).strip(),
             price_period=str(backtest.get("price_period", "max")).strip(),
+        ),
+        agent=AgentConfig(
+            provider=str(agent.get("provider", "ollama")).strip().lower(),
+            model=str(agent.get("model", "gpt-oss:120b")).strip(),
+            base_url=str(agent.get("base_url", "http://127.0.0.1:11434")).rstrip("/"),
+            temperature=float(agent.get("temperature", 0.2)),
+            timeout_seconds=max(10, int(agent.get("timeout_seconds", 180))),
+            max_news_items=max(1, int(agent.get("max_news_items", 12))),
+            news_lookback_days=max(1, int(agent.get("news_lookback_days", 21))),
+            include_fundamentals=bool(agent.get("include_fundamentals", True)),
         ),
     )
 

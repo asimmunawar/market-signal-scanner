@@ -10,7 +10,7 @@ The app analyzes a user-defined ticker universe, computes market signals, ranks 
 
 - Config-driven ticker universe from `config.yaml`
 - Optional group expansion for S&P 500, Nasdaq-100, Dow, and major crypto tickers
-- Local FastAPI web GUI for running scans, backtests, charts, and viewing outputs
+- Local FastAPI web GUI for running scans, backtests, charts, agent research, and viewing outputs
 - CLI support for scan, backtest, and chart modes
 - Cached `yfinance` price/fundamental data
 - Technical signals: returns, volatility, drawdown, SMA/EMA, RSI, MACD, stochastic, volume spikes
@@ -19,6 +19,7 @@ The app analyzes a user-defined ticker universe, computes market signals, ranks 
 - Backtesting with contributions, rebalance frequency, max positions, transaction costs, slippage, and benchmark comparison
 - Chart generation with candles, moving averages, Bollinger bands, horizontal support/resistance, diagonal trendlines, RSI, MACD, and volume
 - CSV outputs include entity names plus Yahoo Finance, Google Finance, and TradingView links
+- Ticker research agent with recent news, fundamentals, signal context, and configurable local Ollama LLM summaries
 
 ## Screens And Outputs
 
@@ -28,6 +29,7 @@ The local GUI can:
 - run current scans
 - run historical backtests
 - generate ticker charts
+- generate ticker research reports
 - browse output history
 - preview Markdown reports
 - preview CSV files with clickable finance links
@@ -41,6 +43,7 @@ output/
   scans/<timestamp>/
   backtests/<timestamp>/
   charts/<timestamp>_<TICKER>/
+  agents/<timestamp>_<TICKER>/
 ```
 
 `output/` and `cache/` are ignored by git.
@@ -58,7 +61,8 @@ requirements.txt
 market_signal_scanner/
   api/server.py                 # FastAPI GUI backend
   web/                          # local browser UI and app icon assets
-  cli.py                        # scan/backtest/chart command routing
+  cli.py                        # scan/backtest/chart/agent command routing
+  agent_researcher.py           # source-grounded ticker research agent
   config_loader.py              # YAML config parsing and group expansion
   data_fetcher.py               # yfinance downloads and local cache
   indicators.py                 # signals and metadata columns
@@ -200,6 +204,27 @@ Chart outputs:
 - `<TICKER>_signals.csv`
 - `chart_report.md`
 
+### Ticker Research Agent
+
+```bash
+python market-signal-scanner.py agent --ticker AAPL --config config.yaml --output ./output
+```
+
+The agent gathers current price/signal context, optional fundamentals, and recent free news sources, then asks the configured LLM for a source-grounded buy/sell research memo. By default it uses local Ollama:
+
+```yaml
+agent:
+  provider: "ollama"
+  model: "gpt-oss:120b"
+  base_url: "http://127.0.0.1:11434"
+```
+
+If Ollama is not running or the model is unavailable, the command still writes a conservative fallback report from fetched signals and sources. Agent outputs:
+
+- `agent_report.md`
+- `<TICKER>_sources.csv`
+- `<TICKER>_agent_context.json`
+
 ## Configuration
 
 The app is intentionally config-driven. Tickers should be edited in `config.yaml`, not hardcoded in source code.
@@ -211,6 +236,7 @@ Important sections:
 - `limits`: max tickers and minimum market cap filter
 - `runtime`: caching, workers, price interval/period, fundamentals behavior
 - `backtest`: start/end dates, contributions, rebalance frequency, costs, slippage, benchmark
+- `agent`: local LLM provider/model, news limits, source lookback, and fundamentals behavior
 
 Price interval examples:
 
@@ -248,6 +274,7 @@ Spreadsheet apps usually make URL columns clickable. The web GUI also renders UR
 - Fundamentals are skipped for crypto tickers.
 - Missing data is left missing; the app should not fabricate fundamentals.
 - Backtests are simulations, not predictions.
+- Agent short-term and long-term outlooks are scenario summaries, not predictions or guarantees.
 - Support/resistance and trendline detection are heuristic chart annotations, not guarantees.
 - Transaction cost and slippage assumptions are configurable but simplified.
 

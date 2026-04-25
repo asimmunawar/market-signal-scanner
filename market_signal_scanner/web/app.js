@@ -55,6 +55,7 @@ function startPolling(jobId) {
         await loadRuns();
         await loadJobs();
         if (job.command === 'chart' && job.status === 'completed') showChartFromJob(job);
+        if (job.command === 'agent' && job.status === 'completed') showAgentFromJob(job);
       }
     } catch (error) {
       renderLatestJob({ status: 'failed', command: 'unknown', error: error.message });
@@ -98,6 +99,7 @@ async function loadRuns() {
   renderRunList('scanRuns', 'scans', runs.scans);
   renderRunList('backtestRuns', 'backtests', runs.backtests);
   renderRunList('chartRuns', 'charts', runs.charts);
+  renderRunList('agentRuns', 'agents', runs.agents);
 }
 
 function renderRunList(containerId, kind, runs) {
@@ -159,6 +161,26 @@ async function showChartFromJob(job) {
   `;
 }
 
+async function showAgentFromJob(job) {
+  if (!job.output_dir) return;
+  const detail = await (await api(`/api/runs/agents/${job.output_dir}`)).json();
+  const report = detail.files.find((file) => file.name === 'agent_report.md');
+  const sources = detail.files.find((file) => file.name.endsWith('_sources.csv'));
+  $('agentPreview').className = 'panel preview';
+  if (!report) {
+    $('agentPreview').innerHTML = '<div class="empty">Agent finished, but no report file was found.</div>';
+    return;
+  }
+  const preview = await (await api(`/api/preview/agents/${job.output_dir}/agent_report.md`)).json();
+  $('agentPreview').innerHTML = `
+    <div class="panel-title-row">
+      <a class="download" href="${report.url}" target="_blank">Open agent report</a>
+      ${sources ? `<a class="download" href="${sources.url}" target="_blank">Open sources</a>` : ''}
+    </div>
+    <pre>${escapeHtml(preview.text || '')}</pre>
+  `;
+}
+
 async function loadConfig() {
   try {
     const text = await (await api('/api/config')).text();
@@ -212,6 +234,10 @@ function wireActions() {
     no_volume: $('hideVolume').checked,
     no_rsi: $('hideRsi').checked,
     no_macd: $('hideMacd').checked,
+  }));
+  $('runAgent').addEventListener('click', () => createJob({
+    command: 'agent',
+    ticker: $('agentTicker').value.trim(),
   }));
   $('refreshRuns').addEventListener('click', loadRuns);
   $('refreshJobs').addEventListener('click', loadJobs);
