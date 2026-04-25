@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>market-signal-scanner</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">MS</div>
+        <div>
+          <h1>market-signal-scanner</h1>
+          <p>Signals, backtests, charts</p>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-button active" data-tab="run">Run</button>
+        <button class="nav-button" data-tab="chart">Chart</button>
+        <button class="nav-button" data-tab="outputs">Outputs</button>
+        <button class="nav-button" data-tab="config">Config</button>
+        <button class="nav-button" data-tab="jobs">Jobs</button>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section id="tab-run" class="tab active">
+        <div class="page-head">
+          <div>
+            <h2>Run Scanner</h2>
+            <p>Launch current scans or historical backtests from the same config file.</p>
+          </div>
+        </div>
+        <div class="grid two">
+          <section class="panel">
+            <h3>Current Scan</h3>
+            <label class="check-row"><input id="scanSkipFundamentals" type="checkbox" /> Skip fundamentals</label>
+            <button id="runScan" class="primary">Run Scan</button>
+            <p class="hint">Writes to <code>output/scans/&lt;timestamp&gt;/</code>.</p>
+          </section>
+          <section class="panel">
+            <h3>Backtest</h3>
+            <p class="compact">Uses the <code>backtest</code> section in <code>config.yaml</code>.</p>
+            <button id="runBacktest" class="primary">Run Backtest</button>
+            <p class="hint">Writes to <code>output/backtests/&lt;timestamp&gt;/</code>.</p>
+          </section>
+        </div>
+        <section class="panel live-panel">
+          <div class="panel-title-row">
+            <h3>Latest Job</h3>
+            <button id="refreshJobs" class="ghost">Refresh</button>
+          </div>
+          <div id="latestJob" class="job-card muted">No job started yet.</div>
+        </section>
+      </section>
+
+      <section id="tab-chart" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Ticker Chart</h2>
+            <p>Create a marked-up chart with candles, MAs, Bollinger bands, horizontal levels, diagonal trendlines, RSI, MACD, and volume.</p>
+          </div>
+        </div>
+        <section class="panel">
+          <div class="form-grid">
+            <label>Ticker<input id="chartTicker" value="AAPL" /></label>
+            <label>Period<input id="chartPeriod" value="2y" /></label>
+            <label>Interval<input id="chartInterval" value="1d" /></label>
+            <label>Lookback<input id="chartLookback" type="number" value="180" min="30" /></label>
+            <label>Chart Type<select id="chartType"><option value="candle">Candles</option><option value="line">Line</option></select></label>
+            <label>Moving Averages<input id="chartMa" value="20,50,100,200" /></label>
+          </div>
+          <div class="checks">
+            <label><input id="hideSR" type="checkbox" /> Hide support/resistance</label>
+            <label><input id="hideBollinger" type="checkbox" /> Hide Bollinger</label>
+            <label><input id="hideVolume" type="checkbox" /> Hide volume</label>
+            <label><input id="hideRsi" type="checkbox" /> Hide RSI</label>
+            <label><input id="hideMacd" type="checkbox" /> Hide MACD</label>
+          </div>
+          <button id="runChart" class="primary">Generate Chart</button>
+        </section>
+        <section id="chartPreview" class="panel preview empty">No chart generated in this session yet.</section>
+      </section>
+
+      <section id="tab-outputs" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Outputs</h2>
+            <p>Browse generated scans, backtests, and charts.</p>
+          </div>
+          <button id="refreshRuns" class="ghost">Refresh</button>
+        </div>
+        <div class="grid outputs-grid">
+          <section class="panel"><h3>Scans</h3><div id="scanRuns" class="run-list"></div></section>
+          <section class="panel"><h3>Backtests</h3><div id="backtestRuns" class="run-list"></div></section>
+          <section class="panel"><h3>Charts</h3><div id="chartRuns" class="run-list"></div></section>
+        </div>
+        <section class="panel viewer-panel">
+          <div class="panel-title-row"><h3>Preview</h3><a id="downloadLink" class="download" href="#" target="_blank">Open file</a></div>
+          <div id="fileViewer" class="viewer empty">Select an output file.</div>
+        </section>
+      </section>
+
+      <section id="tab-config" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Config</h2>
+            <p>Edit the source of truth for tickers, groups, runtime, and backtest settings.</p>
+          </div>
+          <div class="button-row"><button id="loadConfig" class="ghost">Reload</button><button id="saveConfig" class="primary">Save Config</button></div>
+        </div>
+        <textarea id="configEditor" spellcheck="false"></textarea>
+        <div id="configStatus" class="status-line"></div>
+      </section>
+
+      <section id="tab-jobs" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Jobs</h2>
+            <p>Recent server-side commands and logs.</p>
+          </div>
+          <button id="refreshJobsPage" class="ghost">Refresh</button>
+        </div>
+        <div id="jobsList" class="jobs-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

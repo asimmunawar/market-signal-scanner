@@ -1,0 +1,205 @@
+tickers:
+
+  # -------------------------
+  # INDIVIDUAL STOCKS (US Large Cap Leaders)
+  # -------------------------
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - GOOGL
+  - META
+  - TSLA
+  - AMD
+  - AVGO
+  - ORCL
+  - CRM
+  - ADBE
+  - INTC
+  - QCOM
+  - NOW
+  - IBM
+  - NFLX
+  - PYPL
+  - SHOP
+  - UBER
+
+  - JPM
+  - BAC
+  - WFC
+  - GS
+  - MS
+  - BLK
+  - SCHW
+  - C
+  - PNC
+  - USB
+
+  - XOM
+  - CVX
+  - COP
+  - SLB
+  - EOG
+
+  - UNH
+  - JNJ
+  - PFE
+  - ABBV
+  - MRK
+  - LLY
+  - TMO
+  - DHR
+
+  - COST
+  - WMT
+  - HD
+  - LOW
+  - MCD
+  - SBUX
+  - NKE
+  - DIS
+  - BKNG
+  - TGT
+
+  - CAT
+  - BA
+  - GE
+  - DE
+  - LMT
+  - RTX
+
+  # -------------------------
+  # ETFs (Market + Sectors + Factors)
+  # -------------------------
+  - SPY
+  - QQQ
+  - DIA
+  - VTI
+  - IVV
+
+  - IWM
+  - EFA
+  - EEM
+
+  - XLF
+  - XLK
+  - XLE
+  - XLV
+  - XLY
+  - XLP
+  - XLI
+  - XLB
+  - XLU
+  - XLRE
+
+  - ARKK
+  - SMH
+  - SOXX
+
+  - VOO
+  - SCHD
+  - VIG
+  - DGRO
+
+  - TLT
+  - IEF
+  - SHY
+  - LQD
+  - HYG
+
+  - GLD
+  - SLV
+  - USO
+
+  # -------------------------
+  # CRYPTO (Major Liquid Assets)
+  # -------------------------
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - BNB-USD
+  - XRP-USD
+  - ADA-USD
+  - DOGE-USD
+  - AVAX-USD
+  - DOT-USD
+  - MATIC-USD
+
+# Optional universe expansion. These add tickers on top of the manual tickers above.
+# true = include that group, false = ignore it.
+# sp500/nasdaq100/dow are pulled from free Wikipedia tables at runtime.
+# crypto_top uses a built-in list of major liquid crypto tickers.
+groups:
+  sp500: true
+  nasdaq100: false
+  dow: false
+  crypto_top: true
+
+# Universe filters.
+# max_tickers caps the final deduplicated list after manual tickers + groups.
+# min_market_cap filters out stocks below this market cap when fundamentals are available.
+# 1000000000 = $1B. Crypto and tickers with missing market cap are kept.
+limits:
+  max_tickers: 500
+  min_market_cap: 1000000000
+
+# Runtime and data-fetch behavior.
+runtime:
+  # true = skip fundamentals like P/E, PEG, margins, market cap, revenue growth,
+  # analyst ratings, and free cash flow. This makes scans faster but less complete.
+  skip_fundamentals: false
+
+  # Number of parallel worker threads for fetching/analyzing. Increase carefully.
+  workers: 5
+
+  # Local cache folder for downloaded prices and fundamentals.
+  cache_dir: "./cache"
+
+  # yfinance candle interval / price granularity.
+  # Common values: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo.
+  # Daily 1d is best for this scanner's 1M/3M/6M/1Y investing signals.
+  price_interval: "1d"
+
+  # yfinance history window. Intraday intervals require shorter periods.
+  # Examples: 7d for 1m, 60d for 1h, 2y or 5y for 1d.
+  price_period: "2y"
+
+  # Reuse cached prices until they are older than this many hours.
+  refresh_prices_hours: 12
+
+  # Reuse cached fundamentals until they are older than this many days.
+  refresh_fundamentals_days: 7
+
+# Historical simulation settings. Run with:
+# python market-signal-scanner.py backtest --config config.yaml --output ./output
+backtest:
+  # Backtest start/end date. Leave end_date blank/null to use the latest cached/downloaded date.
+  start_date: "2020-01-01"
+  end_date: null
+
+  # Starting portfolio cash.
+  initial_cash: 10000
+
+  # Add new money during the simulation. Set amount to 0 to disable contributions.
+  contribution_amount: 500
+  contribution_frequency: "monthly"   # daily, weekly, monthly
+
+  # How often the strategy recomputes scores and rebalances positions.
+  rebalance_frequency: "weekly"       # daily, weekly, monthly
+
+  # Portfolio construction rules.
+  max_positions: 10
+  min_score_to_buy: 30
+  sell_below_score: 0
+
+  # Trading realism assumptions. 5 bps = 0.05%.
+  transaction_cost_bps: 5
+  slippage_bps: 10
+
+  # Benchmark for comparison. It is added to the backtest fetch list automatically.
+  benchmark: "SPY"
+
+  # Backtests should usually use daily candles. Intraday backtests are possible but slower
+  # and make SMA/RSI/MACD windows mean bars, not days.
+  price_interval: "1d"
+  price_period: "max"
