@@ -182,6 +182,20 @@ async function saveConfig() {
   }
 }
 
+
+async function shutdownServer() {
+  const confirmed = window.confirm('Stop the local market-signal-scanner GUI server? You will need to restart it from Terminal to use the GUI again.');
+  if (!confirmed) return;
+  const status = $('shutdownStatus');
+  status.textContent = 'Shutdown requested...';
+  try {
+    await api('/api/shutdown', { method: 'POST' });
+    status.textContent = 'Server stopped. You can close this tab.';
+  } catch (error) {
+    status.textContent = `Shutdown request failed: ${error.message}`;
+  }
+}
+
 function wireActions() {
   $('runScan').addEventListener('click', () => createJob({ command: 'scan', skip_fundamentals: $('scanSkipFundamentals').checked }));
   $('runBacktest').addEventListener('click', () => createJob({ command: 'backtest' }));
@@ -204,6 +218,7 @@ function wireActions() {
   $('refreshJobsPage').addEventListener('click', loadJobs);
   $('loadConfig').addEventListener('click', loadConfig);
   $('saveConfig').addEventListener('click', saveConfig);
+  $('shutdownServer').addEventListener('click', shutdownServer);
 }
 
 

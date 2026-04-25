@@ -100,6 +100,8 @@ http://127.0.0.1:8000
 
 The GUI is the easiest way to run scans/backtests/charts and inspect generated reports.
 
+To stop the GUI server, either click **Shutdown Server** in the sidebar or press `Ctrl+C` in the terminal where the server is running.
+
 ## CLI Usage
 
 ### Current Scan

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import csv
+import os
+import signal
 import subprocess
 import sys
 import threading
@@ -69,6 +71,16 @@ def index() -> FileResponse:
 
 
 app.mount("/static", StaticFiles(directory=WEB_ROOT), name="static")
+
+
+@app.post("/api/shutdown")
+def shutdown_server() -> dict[str, Any]:
+    threading.Timer(0.5, stop_process).start()
+    return {"ok": True, "message": "Server shutdown requested."}
+
+
+def stop_process() -> None:
+    os.kill(os.getpid(), signal.SIGINT)
 
 
 @app.get("/api/config", response_class=PlainTextResponse)
