@@ -107,6 +107,15 @@ textarea { width: 100%; min-height: 68vh; font-family: ui-monospace, SFMono-Regu
 .markdown-body a { color: var(--accent-strong); font-weight: 750; text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
 .markdown-body code { font-size: 12px; }
+.markdown-table-wrap {
+  overflow: auto; max-width: 100%; margin: 12px 0 20px;
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.markdown-body table { min-width: 720px; font-size: 13px; background: white; }
+.markdown-body th, .markdown-body td { white-space: nowrap; vertical-align: top; }
+.markdown-body th { color: #243447; position: static; }
+.markdown-body td.align-right, .markdown-body th.align-right { text-align: right; }
+.markdown-body td.align-center, .markdown-body th.align-center { text-align: center; }
 .markdown-body pre {
   background: #0f1720; color: #d7e2ee; padding: 12px; border-radius: 8px;
   overflow: auto; white-space: pre; font-size: 12px;

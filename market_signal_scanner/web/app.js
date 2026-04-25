@@ -294,7 +294,8 @@ function renderMarkdown(markdown) {
     flushList();
   };
 
-  lines.forEach((line) => {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     if (line.trim().startsWith('```')) {
       if (inCode) {
         html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
@@ -304,17 +305,25 @@ function renderMarkdown(markdown) {
         flushBlocks();
         inCode = true;
       }
-      return;
+      continue;
+    }
+
+    if (!inCode && isMarkdownTableStart(lines, index)) {
+      flushBlocks();
+      const table = collectMarkdownTable(lines, index);
+      html.push(renderMarkdownTable(table.rows, table.alignments));
+      index = table.nextIndex - 1;
+      continue;
     }
 
     if (inCode) {
       code.push(line);
-      return;
+      continue;
     }
 
     if (!line.trim()) {
       flushBlocks();
-      return;
+      continue;
     }
 
     const heading = line.match(/^(#{1,4})\s+(.+)$/);
@@ -322,29 +331,86 @@ function renderMarkdown(markdown) {
       flushBlocks();
       const level = heading[1].length;
       html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
-      return;
+      continue;
     }
 
     if (/^[-*_]{3,}\s*$/.test(line.trim())) {
       flushBlocks();
       html.push('<hr />');
-      return;
+      continue;
     }
 
     const bullet = line.match(/^\s*[-*]\s+(.+)$/);
     if (bullet) {
       flushParagraph();
       list.push(bullet[1]);
-      return;
+      continue;
     }
 
     flushList();
     paragraph.push(line.trim());
-  });
+  }
 
   if (inCode) html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
   flushBlocks();
   return `<article class="markdown-body">${html.join('')}</article>`;
+}
+
+function isMarkdownTableStart(lines, index) {
+  if (index + 1 >= lines.length) return false;
+  const header = lines[index].trim();
+  const separator = lines[index + 1].trim();
+  return isPipeRow(header) && isTableSeparator(separator) && splitTableRow(header).length === splitTableRow(separator).length;
+}
+
+function collectMarkdownTable(lines, startIndex) {
+  const alignments = splitTableRow(lines[startIndex + 1]).map(tableAlignment);
+  const rows = [splitTableRow(lines[startIndex])];
+  let index = startIndex + 2;
+  while (index < lines.length && isPipeRow(lines[index].trim())) {
+    rows.push(splitTableRow(lines[index]));
+    index += 1;
+  }
+  return { rows, alignments, nextIndex: index };
+}
+
+function renderMarkdownTable(rows, alignments) {
+  if (!rows.length) return '';
+  const header = rows[0];
+  const body = rows.slice(1);
+  const headerHtml = header.map((cell, index) => `<th${alignAttr(alignments[index])}>${inlineMarkdown(cell)}</th>`).join('');
+  const bodyHtml = body.map((row) => {
+    const cells = header.map((_cell, index) => row[index] || '');
+    return `<tr>${cells.map((cell, index) => `<td${alignAttr(alignments[index])}>${inlineMarkdown(cell)}</td>`).join('')}</tr>`;
+  }).join('');
+  return `<div class="markdown-table-wrap"><table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
+}
+
+function isPipeRow(line) {
+  return line.includes('|') && splitTableRow(line).length >= 2;
+}
+
+function isTableSeparator(line) {
+  if (!isPipeRow(line)) return false;
+  return splitTableRow(line).every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitTableRow(line) {
+  let clean = line.trim();
+  if (clean.startsWith('|')) clean = clean.slice(1);
+  if (clean.endsWith('|')) clean = clean.slice(0, -1);
+  return clean.split('|').map((cell) => cell.trim());
+}
+
+function tableAlignment(value) {
+  const cell = value.trim();
+  if (cell.startsWith(':') && cell.endsWith(':')) return 'center';
+  if (cell.endsWith(':')) return 'right';
+  return 'left';
+}
+
+function alignAttr(alignment) {
+  return alignment && alignment !== 'left' ? ` class="align-${alignment}"` : '';
 }
 
 function inlineMarkdown(value) {
