@@ -136,7 +136,9 @@ async function previewFile(kind, runId, filename) {
     $('fileViewer').innerHTML = csvTable(preview.rows);
   } else if (preview.type === 'text') {
     $('fileViewer').className = 'viewer';
-    $('fileViewer').innerHTML = `<pre>${escapeHtml(preview.text)}</pre>`;
+    $('fileViewer').innerHTML = filename.toLowerCase().endsWith('.md')
+      ? renderMarkdown(preview.text)
+      : `<pre>${escapeHtml(preview.text)}</pre>`;
   } else {
     $('fileViewer').className = 'viewer empty';
     $('fileViewer').textContent = 'Binary file preview is unavailable.';
@@ -177,7 +179,7 @@ async function showAgentFromJob(job) {
       <a class="download" href="${report.url}" target="_blank">Open agent report</a>
       ${sources ? `<a class="download" href="${sources.url}" target="_blank">Open sources</a>` : ''}
     </div>
-    <pre>${escapeHtml(preview.text || '')}</pre>
+    ${renderMarkdown(preview.text || '')}
   `;
 }
 
@@ -267,6 +269,104 @@ function linkLabel(url) {
   } catch (_) {
     return url;
   }
+}
+
+function renderMarkdown(markdown) {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const html = [];
+  let paragraph = [];
+  let list = [];
+  let inCode = false;
+  let code = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list.length) return;
+    html.push(`<ul>${list.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ul>`);
+    list = [];
+  };
+  const flushBlocks = () => {
+    flushParagraph();
+    flushList();
+  };
+
+  lines.forEach((line) => {
+    if (line.trim().startsWith('```')) {
+      if (inCode) {
+        html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+        code = [];
+        inCode = false;
+      } else {
+        flushBlocks();
+        inCode = true;
+      }
+      return;
+    }
+
+    if (inCode) {
+      code.push(line);
+      return;
+    }
+
+    if (!line.trim()) {
+      flushBlocks();
+      return;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushBlocks();
+      const level = heading[1].length;
+      html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      return;
+    }
+
+    if (/^[-*_]{3,}\s*$/.test(line.trim())) {
+      flushBlocks();
+      html.push('<hr />');
+      return;
+    }
+
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      list.push(bullet[1]);
+      return;
+    }
+
+    flushList();
+    paragraph.push(line.trim());
+  });
+
+  if (inCode) html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+  flushBlocks();
+  return `<article class="markdown-body">${html.join('')}</article>`;
+}
+
+function inlineMarkdown(value) {
+  const parts = [];
+  const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = linkPattern.exec(String(value))) !== null) {
+    parts.push(formatInlineText(String(value).slice(lastIndex, match.index)));
+    parts.push(`<a href="${escapeHtml(match[2])}" target="_blank" rel="noopener noreferrer">${formatInlineText(match[1])}</a>`);
+    lastIndex = match.index + match[0].length;
+  }
+  parts.push(formatInlineText(String(value).slice(lastIndex)));
+  return parts.join('');
+}
+
+function formatInlineText(value) {
+  let text = escapeHtml(value);
+  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  return text;
 }
 
 function escapeHtml(value) {
