@@ -63,7 +63,7 @@ class BacktestConfig:
 
 
 @dataclass(frozen=True)
-class AgentConfig:
+class NewsSummaryConfig:
     provider: str = "ollama"
     model: str = "gpt-oss:120b"
     base_url: str = "http://127.0.0.1:11434"
@@ -86,7 +86,7 @@ class ScannerConfig:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
-    agent: AgentConfig = field(default_factory=AgentConfig)
+    news_summary: NewsSummaryConfig = field(default_factory=NewsSummaryConfig)
 
 
 def load_config(path: str | Path) -> ScannerConfig:
@@ -100,8 +100,8 @@ def load_config(path: str | Path) -> ScannerConfig:
     limits = raw.get("limits") or {}
     runtime = raw.get("runtime") or {}
     backtest = raw.get("backtest") or {}
-    agent = raw.get("news_summary") or raw.get("agent") or {}
-    news_sources = agent.get("news_sources") or agent.get("sources") or {}
+    news_summary = raw.get("news_summary") or {}
+    news_sources = news_summary.get("news_sources") or news_summary.get("sources") or {}
 
     return ScannerConfig(
         tickers=[normalize_ticker(t) for t in raw.get("tickers", []) if t],
@@ -136,20 +136,20 @@ def load_config(path: str | Path) -> ScannerConfig:
             price_interval=str(backtest.get("price_interval", runtime.get("price_interval", "1d"))).strip(),
             price_period=str(backtest.get("price_period", "max")).strip(),
         ),
-        agent=AgentConfig(
-            provider=str(agent.get("provider", "ollama")).strip().lower(),
-            model=str(agent.get("model", "gpt-oss:120b")).strip(),
-            base_url=str(agent.get("base_url", "http://127.0.0.1:11434")).rstrip("/"),
-            temperature=float(agent.get("temperature", 0.2)),
-            timeout_seconds=max(10, int(agent.get("timeout_seconds", 180))),
-            max_news_items=max(1, int(agent.get("max_news_items", 12))),
-            news_lookback_days=max(1, int(agent.get("news_lookback_days", 21))),
+        news_summary=NewsSummaryConfig(
+            provider=str(news_summary.get("provider", "ollama")).strip().lower(),
+            model=str(news_summary.get("model", "gpt-oss:120b")).strip(),
+            base_url=str(news_summary.get("base_url", "http://127.0.0.1:11434")).rstrip("/"),
+            temperature=float(news_summary.get("temperature", 0.2)),
+            timeout_seconds=max(10, int(news_summary.get("timeout_seconds", 180))),
+            max_news_items=max(1, int(news_summary.get("max_news_items", 12))),
+            news_lookback_days=max(1, int(news_summary.get("news_lookback_days", 21))),
             news_sources={
                 "yfinance_news": bool(news_sources.get("yfinance_news", True)),
                 "yahoo_rss": bool(news_sources.get("yahoo_rss", True)),
                 "google_news": bool(news_sources.get("google_news", True)),
             },
-            include_fundamentals=bool(agent.get("include_fundamentals", True)),
+            include_fundamentals=bool(news_summary.get("include_fundamentals", True)),
         ),
     )
 

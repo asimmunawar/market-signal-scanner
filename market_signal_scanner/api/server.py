@@ -93,7 +93,7 @@ def llm_status() -> dict[str, Any]:
 @app.post("/api/llm/start")
 def start_llm() -> dict[str, Any]:
     config = load_config(CONFIG_PATH)
-    if config.agent.provider != "ollama":
+    if config.news_summary.provider != "ollama":
         raise HTTPException(status_code=400, detail="Start is only supported for local Ollama provider")
 
     status = get_llm_status()
@@ -181,7 +181,6 @@ def list_runs() -> dict[str, Any]:
         "backtests": runs_for("backtests"),
         "charts": runs_for("charts"),
         "news": runs_for("news"),
-        "agents": runs_for("agents"),
     }
 
 
@@ -223,9 +222,9 @@ def preview_file(kind: str, run_id: str, filename: str) -> dict[str, Any]:
 
 @app.post("/api/jobs")
 def create_job(request: JobRequest) -> dict[str, Any]:
-    if request.command not in {"scan", "backtest", "chart", "news", "agent"}:
-        raise HTTPException(status_code=400, detail="command must be scan, backtest, chart, news, or agent")
-    if request.command in {"chart", "news", "agent"} and not request.ticker:
+    if request.command not in {"scan", "backtest", "chart", "news"}:
+        raise HTTPException(status_code=400, detail="command must be scan, backtest, chart, or news")
+    if request.command in {"chart", "news"} and not request.ticker:
         raise HTTPException(status_code=400, detail=f"ticker is required for {request.command} jobs")
 
     job = Job(id=str(uuid.uuid4()), command=request.command)
@@ -321,13 +320,13 @@ def build_cli_args(request: JobRequest) -> list[str]:
             args.append("--no-rsi")
         if request.no_macd:
             args.append("--no-macd")
-    if request.command in {"news", "agent"}:
+    if request.command == "news":
         args.extend(["--ticker", request.ticker or ""])
     return args
 
 
 def kind_for_command(command: str) -> str:
-    return {"scan": "scans", "backtest": "backtests", "chart": "charts", "news": "news", "agent": "news"}[command]
+    return {"scan": "scans", "backtest": "backtests", "chart": "charts", "news": "news"}[command]
 
 
 def runs_for(kind: str) -> list[dict[str, Any]]:
@@ -354,7 +353,7 @@ def newest_run(kind: str, preferred: Optional[list[str]] = None) -> Optional[Pat
 
 
 def safe_run_dir(kind: str, run_id: str) -> Path:
-    if kind not in {"scans", "backtests", "charts", "news", "agents"}:
+    if kind not in {"scans", "backtests", "charts", "news"}:
         raise HTTPException(status_code=400, detail="Invalid run kind")
     root = (OUTPUT_ROOT / kind).resolve()
     run_dir = (root / run_id).resolve()
@@ -394,14 +393,14 @@ def serialize_job(job: Job) -> dict[str, Any]:
 
 def get_llm_status() -> dict[str, Any]:
     config = load_config(CONFIG_PATH)
-    agent = config.agent
+    news_summary = config.news_summary
     model_names: list[str] = []
     server_running = False
     model_available = False
     error = None
-    if agent.provider == "ollama":
+    if news_summary.provider == "ollama":
         try:
-            response = requests.get(f"{agent.base_url}/api/tags", timeout=2)
+            response = requests.get(f"{news_summary.base_url}/api/tags", timeout=2)
             response.raise_for_status()
             server_running = True
             data = response.json()
@@ -410,25 +409,25 @@ def get_llm_status() -> dict[str, Any]:
                 for item in data.get("models", [])
                 if isinstance(item, dict) and item.get("name")
             )
-            model_available = agent.model in model_names
+            model_available = news_summary.model in model_names
         except Exception as exc:
             error = str(exc)
     else:
-        error = f"Status checks are not implemented for provider '{agent.provider}'"
+        error = f"Status checks are not implemented for provider '{news_summary.provider}'"
 
     with llm_lock:
         managed_by_app = bool(managed_ollama_process and managed_ollama_process.poll() is None)
 
     return {
-        "provider": agent.provider,
-        "model": agent.model,
-        "base_url": agent.base_url,
+        "provider": news_summary.provider,
+        "model": news_summary.model,
+        "base_url": news_summary.base_url,
         "server_running": server_running,
         "model_available": model_available,
         "installed_models": model_names,
         "managed_by_app": managed_by_app,
-        "can_start": agent.provider == "ollama",
-        "can_stop": agent.provider == "ollama" and managed_by_app,
+        "can_start": news_summary.provider == "ollama",
+        "can_stop": news_summary.provider == "ollama" and managed_by_app,
         "error": None if server_running else error,
     }
 

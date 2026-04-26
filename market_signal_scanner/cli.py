@@ -8,12 +8,12 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-from market_signal_scanner.agent_researcher import run_agent_research
 from market_signal_scanner.backtester import run_backtest
 from market_signal_scanner.charting import ChartOptions, generate_chart_report
 from market_signal_scanner.config_loader import load_config, resolve_ticker_universe
 from market_signal_scanner.data_fetcher import Cache, fetch_fundamentals, fetch_price_history
 from market_signal_scanner.indicators import compute_signals
+from market_signal_scanner.news_summary import run_news_summary
 from market_signal_scanner.reporter import write_outputs
 from market_signal_scanner.scorer import score_universe
 
@@ -23,7 +23,7 @@ LOGGER = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan markets and backtest scanner rules.")
-    parser.add_argument("command", nargs="?", choices=["scan", "backtest", "chart", "news", "agent"], default="scan", help="Run a current scan, historical backtest, ticker chart, or news summary. 'agent' is a backward-compatible alias.")
+    parser.add_argument("command", nargs="?", choices=["scan", "backtest", "chart", "news"], default="scan", help="Run a current scan, historical backtest, ticker chart, or news summary.")
     parser.add_argument("--config", default="config.yaml", help="Path to YAML configuration file.")
     parser.add_argument("--output", default="./output", help="Base output directory.")
     parser.add_argument("--skip-fundamentals", action="store_true", help="Skip fundamentals for this run.")
@@ -55,8 +55,8 @@ def main() -> int:
         return run_backtest_command(config, args)
     if args.command == "chart":
         return run_chart_command(config, args)
-    if args.command in {"news", "agent"}:
-        return run_agent_command(config, args)
+    if args.command == "news":
+        return run_news_command(config, args)
     return run_scan_command(config, args)
 
 
@@ -181,11 +181,11 @@ def run_chart_command(config, args: argparse.Namespace) -> int:
     return 0
 
 
-def run_agent_command(config, args: argparse.Namespace) -> int:
+def run_news_command(config, args: argparse.Namespace) -> int:
     if not args.ticker:
         LOGGER.error("--ticker is required for news mode")
         return 2
-    result = run_agent_research(args.ticker, config, args.output)
+    result = run_news_summary(args.ticker, config, args.output)
     LOGGER.info("Wrote news summary outputs to %s", result.output_dir.resolve())
     LOGGER.info("Report: %s", result.report_path.resolve())
     LOGGER.info("Sources: %s", result.sources_path.resolve())

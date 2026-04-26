@@ -16,7 +16,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-from market_signal_scanner.config_loader import AgentConfig, ScannerConfig
+from market_signal_scanner.config_loader import NewsSummaryConfig, ScannerConfig
 from market_signal_scanner.data_fetcher import Cache, fetch_fundamentals, fetch_price_history, safe_name
 from market_signal_scanner.indicators import compute_signals
 from market_signal_scanner.scorer import score_universe
@@ -36,7 +36,7 @@ class ResearchSource:
 
 
 @dataclass
-class AgentResearchResult:
+class NewsSummaryResult:
     output_dir: Path
     report_path: Path
     sources_path: Path
@@ -44,7 +44,7 @@ class AgentResearchResult:
 
 
 @dataclass
-class AgentState:
+class NewsSummaryState:
     ticker: str
     config: ScannerConfig
     output_base: Path
@@ -60,33 +60,33 @@ class AgentState:
     context_path: Path | None = None
 
 
-class AgentResearchGraph:
+class NewsSummaryPipeline:
     """Small deterministic news-summary pipeline."""
 
     def __init__(self) -> None:
-        self.nodes: list[tuple[str, Callable[[AgentState], AgentState]]] = [
+        self.nodes: list[tuple[str, Callable[[NewsSummaryState], NewsSummaryState]]] = [
             ("market_data", collect_market_data),
             ("news_search", collect_news),
             ("llm_analysis", run_llm_analysis),
             ("report_writer", write_news_outputs),
         ]
 
-    def run(self, state: AgentState) -> AgentState:
+    def run(self, state: NewsSummaryState) -> NewsSummaryState:
         for name, node in self.nodes:
             LOGGER.info("News summary step: %s", name)
             state = node(state)
         return state
 
 
-def run_agent_research(ticker: str, config: ScannerConfig, output_base: str | Path) -> AgentResearchResult:
+def run_news_summary(ticker: str, config: ScannerConfig, output_base: str | Path) -> NewsSummaryResult:
     normalized = ticker.strip().upper()
     if not normalized:
         raise ValueError("ticker is required")
-    state = AgentState(ticker=normalized, config=config, output_base=Path(output_base))
-    completed = AgentResearchGraph().run(state)
+    state = NewsSummaryState(ticker=normalized, config=config, output_base=Path(output_base))
+    completed = NewsSummaryPipeline().run(state)
     if not completed.output_dir or not completed.report_path or not completed.sources_path or not completed.context_path:
         raise RuntimeError("news summary did not produce all expected outputs")
-    return AgentResearchResult(
+    return NewsSummaryResult(
         output_dir=completed.output_dir,
         report_path=completed.report_path,
         sources_path=completed.sources_path,
@@ -94,7 +94,7 @@ def run_agent_research(ticker: str, config: ScannerConfig, output_base: str | Pa
     )
 
 
-def collect_market_data(state: AgentState) -> AgentState:
+def collect_market_data(state: NewsSummaryState) -> NewsSummaryState:
     cache = Cache(state.config.runtime.cache_dir)
     prices = fetch_price_history(
         [state.ticker],
@@ -104,7 +104,7 @@ def collect_market_data(state: AgentState) -> AgentState:
         interval=state.config.runtime.price_interval,
     )
     fundamentals: dict[str, Any] = {}
-    if state.config.agent.include_fundamentals and not state.ticker.endswith("-USD"):
+    if state.config.news_summary.include_fundamentals and not state.ticker.endswith("-USD"):
         fundamentals = fetch_fundamentals(
             [state.ticker],
             cache,
@@ -123,16 +123,16 @@ def collect_market_data(state: AgentState) -> AgentState:
     return state
 
 
-def collect_news(state: AgentState) -> AgentState:
+def collect_news(state: NewsSummaryState) -> NewsSummaryState:
     sources: list[ResearchSource] = []
-    enabled = state.config.agent.news_sources
+    enabled = state.config.news_summary.news_sources
     if enabled.get("yfinance_news", True):
-        sources.extend(fetch_yfinance_news(state.ticker, state.config.agent.max_news_items))
+        sources.extend(fetch_yfinance_news(state.ticker, state.config.news_summary.max_news_items))
     if enabled.get("yahoo_rss", True):
-        sources.extend(fetch_yahoo_rss(state.ticker, state.config.agent.max_news_items))
+        sources.extend(fetch_yahoo_rss(state.ticker, state.config.news_summary.max_news_items))
     if enabled.get("google_news", True):
-        sources.extend(fetch_google_news_rss(state.ticker, state.entity_name, state.config.agent))
-    state.sources = dedupe_sources(sources)[: state.config.agent.max_news_items]
+        sources.extend(fetch_google_news_rss(state.ticker, state.entity_name, state.config.news_summary))
+    state.sources = dedupe_sources(sources)[: state.config.news_summary.max_news_items]
     return state
 
 
@@ -160,16 +160,16 @@ def fetch_yahoo_rss(ticker: str, limit: int) -> list[ResearchSource]:
     return fetch_rss(url, "yahoo_rss", limit)
 
 
-def fetch_google_news_rss(ticker: str, entity_name: str, agent_config: AgentConfig) -> list[ResearchSource]:
+def fetch_google_news_rss(ticker: str, entity_name: str, news_config: NewsSummaryConfig) -> list[ResearchSource]:
     query_name = entity_name if entity_name and entity_name != ticker else ticker
-    query = f'{query_name} {ticker} stock OR earnings OR analyst OR forecast when:{agent_config.news_lookback_days}d'
+    query = f'{query_name} {ticker} stock OR earnings OR analyst OR forecast when:{news_config.news_lookback_days}d'
     url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
-    return fetch_rss(url, "google_news", agent_config.max_news_items)
+    return fetch_rss(url, "google_news", news_config.max_news_items)
 
 
 def fetch_rss(url: str, source_type: str, limit: int) -> list[ResearchSource]:
     try:
-        response = requests.get(url, timeout=15, headers={"User-Agent": "market-signal-scanner/1.0"})
+        response = requests.get(url, timeout=15, headers={"Accept": "application/rss+xml, application/xml, text/xml, */*"})
         response.raise_for_status()
     except Exception as exc:
         LOGGER.warning("RSS fetch failed for %s: %s", source_type, exc)
@@ -191,14 +191,14 @@ def fetch_rss(url: str, source_type: str, limit: int) -> list[ResearchSource]:
     return sources
 
 
-def run_llm_analysis(state: AgentState) -> AgentState:
+def run_llm_analysis(state: NewsSummaryState) -> NewsSummaryState:
     prompt = build_prompt(state)
-    if state.config.agent.provider != "ollama":
-        state.llm_error = f"Unsupported provider configured: {state.config.agent.provider}"
+    if state.config.news_summary.provider != "ollama":
+        state.llm_error = f"Unsupported provider configured: {state.config.news_summary.provider}"
         state.llm_report = fallback_analysis(state)
         return state
     try:
-        state.llm_report = call_ollama(state.config.agent, prompt)
+        state.llm_report = call_ollama(state.config.news_summary, prompt)
     except Exception as exc:
         LOGGER.warning("LLM analysis failed for %s: %s", state.ticker, exc)
         state.llm_error = str(exc)
@@ -206,17 +206,17 @@ def run_llm_analysis(state: AgentState) -> AgentState:
     return state
 
 
-def call_ollama(agent_config: AgentConfig, prompt: str) -> str:
+def call_ollama(news_config: NewsSummaryConfig, prompt: str) -> str:
     payload = {
-        "model": agent_config.model,
+        "model": news_config.model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": agent_config.temperature},
+        "options": {"temperature": news_config.temperature},
     }
     response = requests.post(
-        f"{agent_config.base_url}/api/generate",
+        f"{news_config.base_url}/api/generate",
         json=payload,
-        timeout=agent_config.timeout_seconds,
+        timeout=news_config.timeout_seconds,
     )
     response.raise_for_status()
     data = response.json()
@@ -226,7 +226,7 @@ def call_ollama(agent_config: AgentConfig, prompt: str) -> str:
     return text
 
 
-def build_prompt(state: AgentState) -> str:
+def build_prompt(state: NewsSummaryState) -> str:
     signals = compact_signals(state.price_signals)
     fundamentals = compact_fundamentals(state.fundamentals)
     sources = "\n".join(
@@ -287,7 +287,7 @@ def compact_fundamentals(fundamentals: dict[str, Any]) -> dict[str, Any]:
     return {key: fundamentals.get(key) for key in keys if fundamentals.get(key) is not None}
 
 
-def fallback_analysis(state: AgentState) -> str:
+def fallback_analysis(state: NewsSummaryState) -> str:
     signals = compact_signals(state.price_signals)
     score = signals.get("score", "N/A")
     recommendation = signals.get("recommendation", "Unknown")
@@ -362,7 +362,7 @@ def signal_bullets(signals: dict[str, Any]) -> tuple[list[str], list[str]]:
     return positives, negatives
 
 
-def write_news_outputs(state: AgentState) -> AgentState:
+def write_news_outputs(state: NewsSummaryState) -> NewsSummaryState:
     output_dir = state.output_base / "news" / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{safe_name(state.ticker)}"
     output_dir.mkdir(parents=True, exist_ok=True)
     sources_path = output_dir / f"{safe_name(state.ticker)}_sources.csv"
@@ -380,12 +380,12 @@ def write_news_outputs(state: AgentState) -> AgentState:
         "entity_name": state.entity_name,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "news_summary_config": {
-            "provider": state.config.agent.provider,
-            "model": state.config.agent.model,
-            "base_url": state.config.agent.base_url,
-            "max_news_items": state.config.agent.max_news_items,
-            "news_lookback_days": state.config.agent.news_lookback_days,
-            "news_sources": state.config.agent.news_sources,
+            "provider": state.config.news_summary.provider,
+            "model": state.config.news_summary.model,
+            "base_url": state.config.news_summary.base_url,
+            "max_news_items": state.config.news_summary.max_news_items,
+            "news_lookback_days": state.config.news_summary.news_lookback_days,
+            "news_sources": state.config.news_summary.news_sources,
         },
         "signals": compact_signals(state.price_signals),
         "fundamentals": compact_fundamentals(state.fundamentals),
@@ -401,7 +401,7 @@ def write_news_outputs(state: AgentState) -> AgentState:
     return state
 
 
-def build_full_report(state: AgentState) -> str:
+def build_full_report(state: NewsSummaryState) -> str:
     source_count = len(state.sources)
     llm_status = "completed" if not state.llm_error else f"fallback used: {state.llm_error}"
     return f"""# News Summary: {state.ticker}
@@ -412,7 +412,7 @@ Entity: {state.entity_name or state.ticker}
 
 Flow: market data -> configured news sources -> LLM summary -> report writer
 
-LLM: `{state.config.agent.provider}` / `{state.config.agent.model}` ({llm_status})
+LLM: `{state.config.news_summary.provider}` / `{state.config.news_summary.model}` ({llm_status})
 
 Sources reviewed: {source_count}
 

@@ -7,12 +7,12 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 window.addEventListener('error', (event) => {
-  const status = $('agentStatus');
+  const status = $('newsStatus');
   if (status) status.textContent = `Browser error: ${event.message}`;
 });
 
 window.addEventListener('unhandledrejection', (event) => {
-  const status = $('agentStatus');
+  const status = $('newsStatus');
   const message = event.reason && event.reason.message ? event.reason.message : String(event.reason || 'Unknown promise error');
   if (status) status.textContent = `Request error: ${message}`;
 });
@@ -57,7 +57,7 @@ async function createJob(payload) {
 
 async function createJobWithStatus(payload, statusId, startingMessage) {
   const status = $(statusId);
-  const button = payload.command === 'news' || payload.command === 'agent' ? $('runAgent') : null;
+  const button = payload.command === 'news' ? $('runNews') : null;
   if (status) status.textContent = startingMessage;
   if (button) {
     button.disabled = true;
@@ -78,9 +78,9 @@ async function createJobWithStatus(payload, statusId, startingMessage) {
   }
 }
 
-function runAgentFromUi() {
-  const tickerInput = $('agentTicker');
-  const status = $('agentStatus');
+function runNewsFromUi() {
+  const tickerInput = $('newsTicker');
+  const status = $('newsStatus');
   if (!tickerInput) {
     if (status) status.textContent = 'News summary ticker input was not found. Refresh the page.';
     return;
@@ -93,16 +93,16 @@ function runAgentFromUi() {
   createJobWithStatus({
     command: 'news',
     ticker,
-  }, 'agentStatus', 'Starting news summary...');
+  }, 'newsStatus', 'Starting news summary...');
 }
 
-function wireAgentAction() {
-  const button = $('runAgent');
+function wireNewsAction() {
+  const button = $('runNews');
   if (!button || button.dataset.wired === 'true') return;
   button.dataset.wired = 'true';
   button.addEventListener('click', (event) => {
     event.preventDefault();
-    runAgentFromUi();
+    runNewsFromUi();
   });
 }
 
@@ -119,7 +119,7 @@ function startPolling(jobId) {
         await loadRuns();
         await loadJobs();
         if (job.command === 'chart' && job.status === 'completed') showChartFromJob(job);
-        if ((job.command === 'news' || job.command === 'agent') && job.status === 'completed') showAgentFromJob(job);
+        if (job.command === 'news' && job.status === 'completed') showNewsFromJob(job);
       }
     } catch (error) {
       renderLatestJob({ status: 'failed', command: 'unknown', error: error.message });
@@ -141,14 +141,14 @@ function renderLatestJob(job) {
 }
 
 function renderJobPageStatus(job) {
-  if (job.command !== 'news' && job.command !== 'agent') return;
-  const status = $('agentStatus');
+  if (job.command !== 'news') return;
+  const status = $('newsStatus');
   if (!status) return;
   const output = job.output_dir ? ` Output: ${job.run_kind}/${job.output_dir}.` : '';
   const error = job.error ? ` Error: ${job.error}.` : '';
   status.textContent = `News summary job ${job.status}.${output}${error}`;
   if (job.status === 'completed' || job.status === 'failed') {
-    const button = $('runAgent');
+    const button = $('runNews');
     if (button) {
       button.disabled = false;
       button.textContent = 'Run News Summary';
@@ -179,7 +179,7 @@ async function loadRuns() {
   renderRunList('scanRuns', 'scans', runs.scans);
   renderRunList('backtestRuns', 'backtests', runs.backtests);
   renderRunList('chartRuns', 'charts', runs.charts);
-  renderRunList('agentRuns', 'news', runs.news || runs.agents || []);
+  renderRunList('newsRuns', 'news', runs.news || []);
 }
 
 function renderRunList(containerId, kind, runs) {
@@ -280,19 +280,19 @@ async function showChartFromJob(job) {
   `;
 }
 
-async function showAgentFromJob(job) {
+async function showNewsFromJob(job) {
   if (!job.output_dir) return;
   const runKind = job.run_kind || 'news';
   const detail = await (await api(`/api/runs/${runKind}/${job.output_dir}`)).json();
-  const report = detail.files.find((file) => file.name === 'news_summary.md' || file.name === 'agent_report.md');
+  const report = detail.files.find((file) => file.name === 'news_summary.md');
   const sources = detail.files.find((file) => file.name.endsWith('_sources.csv'));
-  $('agentPreview').className = 'panel preview';
+  $('newsPreview').className = 'panel preview';
   if (!report) {
-    $('agentPreview').innerHTML = '<div class="empty">News summary finished, but no report file was found.</div>';
+    $('newsPreview').innerHTML = '<div class="empty">News summary finished, but no report file was found.</div>';
     return;
   }
   const preview = await (await api(`/api/preview/${runKind}/${job.output_dir}/${report.name}`)).json();
-  $('agentPreview').innerHTML = `
+  $('newsPreview').innerHTML = `
     <div class="panel-title-row">
       <a class="download" href="${report.url}" target="_blank">Open news summary</a>
       ${sources ? `<a class="download" href="${sources.url}" target="_blank">Open sources</a>` : ''}
@@ -441,7 +441,7 @@ async function shutdownServer() {
 }
 
 function wireActions() {
-  wireAgentAction();
+  wireNewsAction();
   $('runScan').addEventListener('click', () => createJob({ command: 'scan', skip_fundamentals: $('scanSkipFundamentals').checked }));
   $('runBacktest').addEventListener('click', () => createJob({ command: 'backtest' }));
   $('runChart').addEventListener('click', () => createJob({

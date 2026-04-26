@@ -21,7 +21,7 @@
       <nav class="nav">
         <button class="nav-button active" data-tab="run">Run</button>
         <button class="nav-button" data-tab="chart">Chart</button>
-        <button class="nav-button" data-tab="agent">News Summary</button>
+        <button class="nav-button" data-tab="news">News Summary</button>
         <button class="nav-button" data-tab="llm">LLM</button>
         <button class="nav-button" data-tab="outputs">Outputs</button>
         <button class="nav-button" data-tab="config">Config</button>
@@ -92,7 +92,7 @@
         <section id="chartPreview" class="panel preview empty">No chart generated in this session yet.</section>
       </section>
 
-      <section id="tab-agent" class="tab">
+      <section id="tab-news" class="tab">
         <div class="page-head">
           <div>
             <h2>News Summary</h2>
@@ -100,14 +100,14 @@
           </div>
         </div>
         <section class="panel">
-          <div class="form-grid agent-form">
-            <label>Ticker<input id="agentTicker" value="AAPL" /></label>
+          <div class="form-grid news-form">
+            <label>Ticker<input id="newsTicker" value="AAPL" /></label>
           </div>
-          <button id="runAgent" class="primary" type="button">Run News Summary</button>
-          <div id="agentStatus" class="status-line"></div>
+          <button id="runNews" class="primary" type="button">Run News Summary</button>
+          <div id="newsStatus" class="status-line"></div>
           <p class="hint">Writes to <code>output/news/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. LLM and news source settings live in <code>config.yaml</code>.</p>
         </section>
-        <section id="agentPreview" class="panel preview empty">No news summary generated in this session yet.</section>
+        <section id="newsPreview" class="panel preview empty">No news summary generated in this session yet.</section>
       </section>
 
       <section id="tab-llm" class="tab">
@@ -152,7 +152,7 @@
           <section class="panel"><h3>Scans</h3><div id="scanRuns" class="run-list"></div></section>
           <section class="panel"><h3>Backtests</h3><div id="backtestRuns" class="run-list"></div></section>
           <section class="panel"><h3>Charts</h3><div id="chartRuns" class="run-list"></div></section>
-          <section class="panel"><h3>News</h3><div id="agentRuns" class="run-list"></div></section>
+          <section class="panel"><h3>News</h3><div id="newsRuns" class="run-list"></div></section>
         </div>
         <section class="panel viewer-panel">
           <div class="panel-title-row"><h3>Preview</h3><a id="downloadLink" class="download" href="#" target="_blank">Open file</a></div>
@@ -185,6 +185,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260426-news-summary"></script>
+  <script src="/static/app.js?v=20260426-news-only"></script>
 </body>
 </html>

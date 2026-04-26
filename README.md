@@ -63,7 +63,7 @@ market_signal_scanner/
   api/server.py                 # FastAPI GUI backend
   web/                          # local browser UI and app icon assets
   cli.py                        # scan/backtest/chart/news command routing
-  agent_researcher.py           # source-grounded ticker news summary pipeline
+  news_summary.py               # source-grounded ticker news summary pipeline
   config_loader.py              # YAML config parsing and group expansion
   data_fetcher.py               # yfinance downloads and local cache
   indicators.py                 # signals and metadata columns
