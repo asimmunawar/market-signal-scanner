@@ -248,7 +248,6 @@ async function loadConfig() {
   try {
     const text = await (await api('/api/config')).text();
     $('configEditor').value = text;
-    renderConfigPreview(text);
     $('configStatus').textContent = 'Config loaded.';
   } catch (error) {
     $('configStatus').textContent = `Could not load config: ${error.message}`;
@@ -262,58 +261,10 @@ async function saveConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: $('configEditor').value }),
     });
-    renderConfigPreview($('configEditor').value);
     $('configStatus').textContent = 'Saved config.yaml.';
   } catch (error) {
     $('configStatus').textContent = `Save failed: ${error.message}`;
   }
-}
-
-function renderConfigPreview(text) {
-  const preview = $('configPreview');
-  if (!preview) return;
-  preview.className = 'code-preview';
-  preview.innerHTML = highlightYaml(text);
-}
-
-function highlightYaml(text) {
-  return String(text || '').split('\n').map((line) => {
-    const indent = line.match(/^\s*/)[0];
-    const trimmed = line.slice(indent.length);
-    if (!trimmed) return '';
-    if (trimmed.startsWith('#')) {
-      return `${escapeHtml(indent)}<span class="tok-comment">${escapeHtml(trimmed)}</span>`;
-    }
-    const listMatch = trimmed.match(/^-\s+(.*)$/);
-    if (listMatch) {
-      return `${escapeHtml(indent)}<span class="tok-punct">-</span> ${highlightYamlValue(listMatch[1])}`;
-    }
-    const keyMatch = trimmed.match(/^([^:#][^:]*):(.*)$/);
-    if (keyMatch) {
-      const key = keyMatch[1];
-      const value = keyMatch[2] || '';
-      return `${escapeHtml(indent)}<span class="tok-key">${escapeHtml(key)}</span><span class="tok-punct">:</span>${highlightYamlValue(value)}`;
-    }
-    return escapeHtml(line);
-  }).join('\n');
-}
-
-function highlightYamlValue(rawValue) {
-  const value = String(rawValue || '');
-  const leading = value.match(/^\s*/)[0];
-  const rest = value.slice(leading.length);
-  if (!rest) return escapeHtml(value);
-  if (rest.startsWith('#')) return `${escapeHtml(leading)}<span class="tok-comment">${escapeHtml(rest)}</span>`;
-
-  const commentIndex = rest.indexOf(' #');
-  const main = commentIndex >= 0 ? rest.slice(0, commentIndex) : rest;
-  const comment = commentIndex >= 0 ? rest.slice(commentIndex) : '';
-  let klass = 'tok-string';
-  const clean = main.trim();
-  if (/^(true|false|null)$/i.test(clean)) klass = 'tok-bool';
-  else if (/^-?\d+(\.\d+)?$/.test(clean)) klass = 'tok-number';
-  else if (/^["'].*["']$/.test(clean)) klass = 'tok-quoted';
-  return `${escapeHtml(leading)}<span class="${klass}">${escapeHtml(main)}</span>${comment ? `<span class="tok-comment">${escapeHtml(comment)}</span>` : ''}`;
 }
 
 async function loadLlmStatus() {
@@ -461,7 +412,6 @@ function wireActions() {
   $('stopLlm').addEventListener('click', stopLlm);
   $('loadConfig').addEventListener('click', loadConfig);
   $('saveConfig').addEventListener('click', saveConfig);
-  $('configEditor').addEventListener('input', () => renderConfigPreview($('configEditor').value));
   $('shutdownServer').addEventListener('click', shutdownServer);
 }
 
