@@ -204,9 +204,9 @@ backtest:
   price_interval: "1d"
   price_period: "max"
 
-# Ticker research agent settings. Run from the GUI Agent tab or:
-# python market-signal-scanner.py agent --ticker AAPL --config config.yaml --output ./output
-agent:
+# Ticker news summary settings. Run from the GUI News Summary tab or:
+# python market-signal-scanner.py news --ticker AAPL --config config.yaml --output ./output
+news_summary:
   # Default is local Ollama, so no cloud API key is required.
   provider: "ollama"
 
@@ -225,6 +225,12 @@ agent:
 
   # Max news/source items to collect before summarizing.
   max_news_items: 12
+
+  # Free news sources to query before summarizing.
+  news_sources:
+    yfinance_news: true
+    yahoo_rss: true
+    google_news: true
 
   # Google News RSS lookback window for query freshness.
   news_lookback_days: 21

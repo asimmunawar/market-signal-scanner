@@ -71,6 +71,11 @@ class AgentConfig:
     timeout_seconds: int = 180
     max_news_items: int = 12
     news_lookback_days: int = 21
+    news_sources: dict[str, bool] = field(default_factory=lambda: {
+        "yfinance_news": True,
+        "yahoo_rss": True,
+        "google_news": True,
+    })
     include_fundamentals: bool = True
 
 
@@ -95,7 +100,8 @@ def load_config(path: str | Path) -> ScannerConfig:
     limits = raw.get("limits") or {}
     runtime = raw.get("runtime") or {}
     backtest = raw.get("backtest") or {}
-    agent = raw.get("agent") or {}
+    agent = raw.get("news_summary") or raw.get("agent") or {}
+    news_sources = agent.get("news_sources") or agent.get("sources") or {}
 
     return ScannerConfig(
         tickers=[normalize_ticker(t) for t in raw.get("tickers", []) if t],
@@ -138,6 +144,11 @@ def load_config(path: str | Path) -> ScannerConfig:
             timeout_seconds=max(10, int(agent.get("timeout_seconds", 180))),
             max_news_items=max(1, int(agent.get("max_news_items", 12))),
             news_lookback_days=max(1, int(agent.get("news_lookback_days", 21))),
+            news_sources={
+                "yfinance_news": bool(news_sources.get("yfinance_news", True)),
+                "yahoo_rss": bool(news_sources.get("yahoo_rss", True)),
+                "google_news": bool(news_sources.get("google_news", True)),
+            },
             include_fundamentals=bool(agent.get("include_fundamentals", True)),
         ),
     )

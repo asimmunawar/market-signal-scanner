@@ -180,6 +180,7 @@ def list_runs() -> dict[str, Any]:
         "scans": runs_for("scans"),
         "backtests": runs_for("backtests"),
         "charts": runs_for("charts"),
+        "news": runs_for("news"),
         "agents": runs_for("agents"),
     }
 
@@ -222,9 +223,9 @@ def preview_file(kind: str, run_id: str, filename: str) -> dict[str, Any]:
 
 @app.post("/api/jobs")
 def create_job(request: JobRequest) -> dict[str, Any]:
-    if request.command not in {"scan", "backtest", "chart", "agent"}:
-        raise HTTPException(status_code=400, detail="command must be scan, backtest, chart, or agent")
-    if request.command in {"chart", "agent"} and not request.ticker:
+    if request.command not in {"scan", "backtest", "chart", "news", "agent"}:
+        raise HTTPException(status_code=400, detail="command must be scan, backtest, chart, news, or agent")
+    if request.command in {"chart", "news", "agent"} and not request.ticker:
         raise HTTPException(status_code=400, detail=f"ticker is required for {request.command} jobs")
 
     job = Job(id=str(uuid.uuid4()), command=request.command)
@@ -320,13 +321,13 @@ def build_cli_args(request: JobRequest) -> list[str]:
             args.append("--no-rsi")
         if request.no_macd:
             args.append("--no-macd")
-    if request.command == "agent":
+    if request.command in {"news", "agent"}:
         args.extend(["--ticker", request.ticker or ""])
     return args
 
 
 def kind_for_command(command: str) -> str:
-    return {"scan": "scans", "backtest": "backtests", "chart": "charts", "agent": "agents"}[command]
+    return {"scan": "scans", "backtest": "backtests", "chart": "charts", "news": "news", "agent": "news"}[command]
 
 
 def runs_for(kind: str) -> list[dict[str, Any]]:
@@ -353,7 +354,7 @@ def newest_run(kind: str, preferred: Optional[list[str]] = None) -> Optional[Pat
 
 
 def safe_run_dir(kind: str, run_id: str) -> Path:
-    if kind not in {"scans", "backtests", "charts", "agents"}:
+    if kind not in {"scans", "backtests", "charts", "news", "agents"}:
         raise HTTPException(status_code=400, detail="Invalid run kind")
     root = (OUTPUT_ROOT / kind).resolve()
     run_dir = (root / run_id).resolve()

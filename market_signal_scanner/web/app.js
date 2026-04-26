@@ -57,7 +57,7 @@ async function createJob(payload) {
 
 async function createJobWithStatus(payload, statusId, startingMessage) {
   const status = $(statusId);
-  const button = payload.command === 'agent' ? $('runAgent') : null;
+  const button = payload.command === 'news' || payload.command === 'agent' ? $('runAgent') : null;
   if (status) status.textContent = startingMessage;
   if (button) {
     button.disabled = true;
@@ -66,13 +66,13 @@ async function createJobWithStatus(payload, statusId, startingMessage) {
   try {
     const job = await createJob(payload);
     if (status) status.textContent = `${job.command} job started. Status: ${job.status}.`;
-    if (button) button.textContent = 'Agent Running...';
+    if (button) button.textContent = 'Summary Running...';
     return job;
   } catch (error) {
     if (status) status.textContent = `Could not start ${payload.command}: ${error.message}`;
     if (button) {
       button.disabled = false;
-      button.textContent = 'Run Agent';
+      button.textContent = 'Run News Summary';
     }
     return null;
   }
@@ -82,18 +82,18 @@ function runAgentFromUi() {
   const tickerInput = $('agentTicker');
   const status = $('agentStatus');
   if (!tickerInput) {
-    if (status) status.textContent = 'Agent ticker input was not found. Refresh the page.';
+    if (status) status.textContent = 'News summary ticker input was not found. Refresh the page.';
     return;
   }
   const ticker = tickerInput.value.trim();
   if (!ticker) {
-    if (status) status.textContent = 'Enter a ticker before running Agent Research.';
+    if (status) status.textContent = 'Enter a ticker before running News Summary.';
     return;
   }
   createJobWithStatus({
-    command: 'agent',
+    command: 'news',
     ticker,
-  }, 'agentStatus', 'Starting agent research...');
+  }, 'agentStatus', 'Starting news summary...');
 }
 
 function wireAgentAction() {
@@ -119,7 +119,7 @@ function startPolling(jobId) {
         await loadRuns();
         await loadJobs();
         if (job.command === 'chart' && job.status === 'completed') showChartFromJob(job);
-        if (job.command === 'agent' && job.status === 'completed') showAgentFromJob(job);
+        if ((job.command === 'news' || job.command === 'agent') && job.status === 'completed') showAgentFromJob(job);
       }
     } catch (error) {
       renderLatestJob({ status: 'failed', command: 'unknown', error: error.message });
@@ -141,17 +141,17 @@ function renderLatestJob(job) {
 }
 
 function renderJobPageStatus(job) {
-  if (job.command !== 'agent') return;
+  if (job.command !== 'news' && job.command !== 'agent') return;
   const status = $('agentStatus');
   if (!status) return;
-  const output = job.output_dir ? ` Output: agents/${job.output_dir}.` : '';
+  const output = job.output_dir ? ` Output: ${job.run_kind}/${job.output_dir}.` : '';
   const error = job.error ? ` Error: ${job.error}.` : '';
-  status.textContent = `Agent job ${job.status}.${output}${error}`;
+  status.textContent = `News summary job ${job.status}.${output}${error}`;
   if (job.status === 'completed' || job.status === 'failed') {
     const button = $('runAgent');
     if (button) {
       button.disabled = false;
-      button.textContent = 'Run Agent';
+      button.textContent = 'Run News Summary';
     }
   }
 }
@@ -179,7 +179,7 @@ async function loadRuns() {
   renderRunList('scanRuns', 'scans', runs.scans);
   renderRunList('backtestRuns', 'backtests', runs.backtests);
   renderRunList('chartRuns', 'charts', runs.charts);
-  renderRunList('agentRuns', 'agents', runs.agents);
+  renderRunList('agentRuns', 'news', runs.news || runs.agents || []);
 }
 
 function renderRunList(containerId, kind, runs) {
@@ -282,18 +282,19 @@ async function showChartFromJob(job) {
 
 async function showAgentFromJob(job) {
   if (!job.output_dir) return;
-  const detail = await (await api(`/api/runs/agents/${job.output_dir}`)).json();
-  const report = detail.files.find((file) => file.name === 'agent_report.md');
+  const runKind = job.run_kind || 'news';
+  const detail = await (await api(`/api/runs/${runKind}/${job.output_dir}`)).json();
+  const report = detail.files.find((file) => file.name === 'news_summary.md' || file.name === 'agent_report.md');
   const sources = detail.files.find((file) => file.name.endsWith('_sources.csv'));
   $('agentPreview').className = 'panel preview';
   if (!report) {
-    $('agentPreview').innerHTML = '<div class="empty">Agent finished, but no report file was found.</div>';
+    $('agentPreview').innerHTML = '<div class="empty">News summary finished, but no report file was found.</div>';
     return;
   }
-  const preview = await (await api(`/api/preview/agents/${job.output_dir}/agent_report.md`)).json();
+  const preview = await (await api(`/api/preview/${runKind}/${job.output_dir}/${report.name}`)).json();
   $('agentPreview').innerHTML = `
     <div class="panel-title-row">
-      <a class="download" href="${report.url}" target="_blank">Open agent report</a>
+      <a class="download" href="${report.url}" target="_blank">Open news summary</a>
       ${sources ? `<a class="download" href="${sources.url}" target="_blank">Open sources</a>` : ''}
     </div>
     ${renderMarkdown(preview.text || '')}
@@ -398,7 +399,7 @@ function renderLlmHelp(status) {
     notes.push(`Install the configured model with: ollama pull ${status.model}`);
   }
   if (!notes.length) {
-    notes.push('The configured LLM is ready for Agent Research.');
+    notes.push('The configured LLM is ready for News Summary.');
   }
   $('llmHelp').innerHTML = notes.map((note) => `<div>${escapeHtml(note)}</div>`).join('');
 }

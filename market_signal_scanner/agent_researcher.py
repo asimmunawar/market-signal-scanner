@@ -61,19 +61,19 @@ class AgentState:
 
 
 class AgentResearchGraph:
-    """Small deterministic agent graph: gather, reason, verify, write."""
+    """Small deterministic news-summary pipeline."""
 
     def __init__(self) -> None:
         self.nodes: list[tuple[str, Callable[[AgentState], AgentState]]] = [
             ("market_data", collect_market_data),
             ("news_search", collect_news),
             ("llm_analysis", run_llm_analysis),
-            ("report_writer", write_agent_outputs),
+            ("report_writer", write_news_outputs),
         ]
 
     def run(self, state: AgentState) -> AgentState:
         for name, node in self.nodes:
-            LOGGER.info("Agent node: %s", name)
+            LOGGER.info("News summary step: %s", name)
             state = node(state)
         return state
 
@@ -85,7 +85,7 @@ def run_agent_research(ticker: str, config: ScannerConfig, output_base: str | Pa
     state = AgentState(ticker=normalized, config=config, output_base=Path(output_base))
     completed = AgentResearchGraph().run(state)
     if not completed.output_dir or not completed.report_path or not completed.sources_path or not completed.context_path:
-        raise RuntimeError("agent research did not produce all expected outputs")
+        raise RuntimeError("news summary did not produce all expected outputs")
     return AgentResearchResult(
         output_dir=completed.output_dir,
         report_path=completed.report_path,
@@ -125,9 +125,13 @@ def collect_market_data(state: AgentState) -> AgentState:
 
 def collect_news(state: AgentState) -> AgentState:
     sources: list[ResearchSource] = []
-    sources.extend(fetch_yfinance_news(state.ticker, state.config.agent.max_news_items))
-    sources.extend(fetch_yahoo_rss(state.ticker, state.config.agent.max_news_items))
-    sources.extend(fetch_google_news_rss(state.ticker, state.entity_name, state.config.agent))
+    enabled = state.config.agent.news_sources
+    if enabled.get("yfinance_news", True):
+        sources.extend(fetch_yfinance_news(state.ticker, state.config.agent.max_news_items))
+    if enabled.get("yahoo_rss", True):
+        sources.extend(fetch_yahoo_rss(state.ticker, state.config.agent.max_news_items))
+    if enabled.get("google_news", True):
+        sources.extend(fetch_google_news_rss(state.ticker, state.entity_name, state.config.agent))
     state.sources = dedupe_sources(sources)[: state.config.agent.max_news_items]
     return state
 
@@ -229,7 +233,7 @@ def build_prompt(state: AgentState) -> str:
         f"{index}. {source.title} | {source.publisher or 'unknown'} | {source.published or 'undated'} | {source.url}\n   {source.summary[:350]}"
         for index, source in enumerate(state.sources, start=1)
     ) or "No recent news sources were found."
-    return f"""You are a cautious financial research agent inside market-signal-scanner.
+    return f"""You are a cautious financial news summarizer inside market-signal-scanner.
 
 Ticker: {state.ticker}
 Entity name: {state.entity_name or state.ticker}
@@ -358,12 +362,12 @@ def signal_bullets(signals: dict[str, Any]) -> tuple[list[str], list[str]]:
     return positives, negatives
 
 
-def write_agent_outputs(state: AgentState) -> AgentState:
-    output_dir = state.output_base / "agents" / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{safe_name(state.ticker)}"
+def write_news_outputs(state: AgentState) -> AgentState:
+    output_dir = state.output_base / "news" / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{safe_name(state.ticker)}"
     output_dir.mkdir(parents=True, exist_ok=True)
     sources_path = output_dir / f"{safe_name(state.ticker)}_sources.csv"
-    context_path = output_dir / f"{safe_name(state.ticker)}_agent_context.json"
-    report_path = output_dir / "agent_report.md"
+    context_path = output_dir / f"{safe_name(state.ticker)}_news_context.json"
+    report_path = output_dir / "news_summary.md"
 
     with sources_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=["title", "publisher", "published", "source_type", "url", "summary"])
@@ -375,12 +379,13 @@ def write_agent_outputs(state: AgentState) -> AgentState:
         "ticker": state.ticker,
         "entity_name": state.entity_name,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "agent_config": {
+        "news_summary_config": {
             "provider": state.config.agent.provider,
             "model": state.config.agent.model,
             "base_url": state.config.agent.base_url,
             "max_news_items": state.config.agent.max_news_items,
             "news_lookback_days": state.config.agent.news_lookback_days,
+            "news_sources": state.config.agent.news_sources,
         },
         "signals": compact_signals(state.price_signals),
         "fundamentals": compact_fundamentals(state.fundamentals),
@@ -399,13 +404,13 @@ def write_agent_outputs(state: AgentState) -> AgentState:
 def build_full_report(state: AgentState) -> str:
     source_count = len(state.sources)
     llm_status = "completed" if not state.llm_error else f"fallback used: {state.llm_error}"
-    return f"""# Agent Research: {state.ticker}
+    return f"""# News Summary: {state.ticker}
 
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Entity: {state.entity_name or state.ticker}
 
-Agent flow: market data -> news search -> LLM analysis -> report writer
+Flow: market data -> configured news sources -> LLM summary -> report writer
 
 LLM: `{state.config.agent.provider}` / `{state.config.agent.model}` ({llm_status})
 
