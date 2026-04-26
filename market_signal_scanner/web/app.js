@@ -110,7 +110,8 @@ function renderRunList(containerId, kind, runs) {
   }
   container.innerHTML = runs.slice(0, 20).map((run) => `
     <div class="run-item">
-      <h4>${run.id}</h4>
+      <h4>${escapeHtml(formatRunTitle(run.id))}</h4>
+      <div class="run-meta">${escapeHtml(formatRunSubtitle(run.id))}</div>
       <div class="file-row">
         ${run.files.map((file) => `<button class="file-pill" data-kind="${kind}" data-run="${run.id}" data-file="${file}">${file}</button>`).join('')}
       </div>
@@ -119,6 +120,42 @@ function renderRunList(containerId, kind, runs) {
   container.querySelectorAll('.file-pill').forEach((button) => {
     button.addEventListener('click', () => previewFile(button.dataset.kind, button.dataset.run, button.dataset.file));
   });
+}
+
+function formatRunTitle(runId) {
+  const parsed = parseRunId(runId);
+  if (!parsed) return runId;
+  const dateLabel = parsed.date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  const timeLabel = parsed.date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${dateLabel} at ${timeLabel}${parsed.suffix ? ` - ${parsed.suffix}` : ''}`;
+}
+
+function formatRunSubtitle(runId) {
+  const parsed = parseRunId(runId);
+  return parsed ? runId : 'Output folder';
+}
+
+function parseRunId(runId) {
+  const match = String(runId).match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})(?:_(.+))?$/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second, suffix] = match;
+  const date = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  );
+  if (Number.isNaN(date.getTime())) return null;
+  return { date, suffix: suffix || '' };
 }
 
 async function previewFile(kind, runId, filename) {

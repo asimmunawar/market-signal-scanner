@@ -84,7 +84,8 @@ textarea { width: 100%; min-height: 68vh; font-family: ui-monospace, SFMono-Regu
 .muted, .empty { color: var(--muted); }
 .status-line { margin-top: 10px; min-height: 22px; color: var(--muted); }
 .run-list { display: grid; gap: 10px; max-height: 360px; overflow: auto; }
-.run-item h4 { margin: 0 0 8px; font-size: 14px; }
+.run-item h4 { margin: 0; font-size: 14px; color: #1f2a37; }
+.run-meta { margin: 2px 0 9px; color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .file-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .file-pill { border: 1px solid #cfd8e3; padding: 5px 8px; font-size: 12px; cursor: pointer; color: #243447; }
 .file-pill:hover { border-color: var(--accent); color: var(--accent-strong); }
