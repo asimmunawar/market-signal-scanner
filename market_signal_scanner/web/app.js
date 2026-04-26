@@ -44,12 +44,26 @@ async function createJob(payload) {
   return job;
 }
 
+async function createJobWithStatus(payload, statusId, startingMessage) {
+  const status = $(statusId);
+  if (status) status.textContent = startingMessage;
+  try {
+    const job = await createJob(payload);
+    if (status) status.textContent = `${job.command} job started. Status: ${job.status}.`;
+    return job;
+  } catch (error) {
+    if (status) status.textContent = `Could not start ${payload.command}: ${error.message}`;
+    throw error;
+  }
+}
+
 function startPolling(jobId) {
   if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = setInterval(async () => {
     try {
       const job = await (await api(`/api/jobs/${jobId}`)).json();
       renderLatestJob(job);
+      renderJobPageStatus(job);
       if (job.status === 'completed' || job.status === 'failed') {
         clearInterval(state.pollTimer);
         state.pollTimer = null;
@@ -75,6 +89,15 @@ function renderLatestJob(job) {
     ${output}${error}
     ${job.logs ? `<pre class="job-log">${escapeHtml(job.logs.slice(-5000))}</pre>` : ''}
   `;
+}
+
+function renderJobPageStatus(job) {
+  if (job.command !== 'agent') return;
+  const status = $('agentStatus');
+  if (!status) return;
+  const output = job.output_dir ? ` Output: agents/${job.output_dir}.` : '';
+  const error = job.error ? ` Error: ${job.error}.` : '';
+  status.textContent = `Agent job ${job.status}.${output}${error}`;
 }
 
 async function loadJobs() {
@@ -377,10 +400,10 @@ function wireActions() {
     no_rsi: $('hideRsi').checked,
     no_macd: $('hideMacd').checked,
   }));
-  $('runAgent').addEventListener('click', () => createJob({
+  $('runAgent').addEventListener('click', () => createJobWithStatus({
     command: 'agent',
     ticker: $('agentTicker').value.trim(),
-  }));
+  }, 'agentStatus', 'Starting agent research...'));
   $('refreshRuns').addEventListener('click', loadRuns);
   $('refreshJobs').addEventListener('click', loadJobs);
   $('refreshJobsPage').addEventListener('click', loadJobs);
