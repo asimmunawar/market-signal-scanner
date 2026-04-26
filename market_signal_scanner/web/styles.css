@@ -81,6 +81,20 @@ input, select, textarea {
   border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: white; color: var(--ink);
 }
 textarea { width: 100%; min-height: 68vh; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; resize: vertical; }
+.config-preview-panel { margin-bottom: 14px; }
+.code-preview {
+  margin: 10px 0 0; max-height: 38vh; overflow: auto; white-space: pre;
+  background: #0f1720; color: #d7e2ee; border-radius: 8px; padding: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px; line-height: 1.5;
+}
+.tok-comment { color: #7dd3fc; }
+.tok-key { color: #f9a8d4; font-weight: 750; }
+.tok-punct { color: #cbd5e1; }
+.tok-bool { color: #fbbf24; }
+.tok-number { color: #86efac; }
+.tok-string { color: #d7e2ee; }
+.tok-quoted { color: #a7f3d0; }
 .checks { display: flex; flex-wrap: wrap; gap: 12px 18px; margin: 16px 0; }
 .checks label { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .job-card, .run-item, .file-pill { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fbfcfd; }

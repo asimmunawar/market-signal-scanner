@@ -168,6 +168,13 @@
           </div>
           <div class="button-row"><button id="loadConfig" class="ghost">Reload</button><button id="saveConfig" class="primary">Save Config</button></div>
         </div>
+        <section class="panel config-preview-panel">
+          <div class="panel-title-row">
+            <h3>Highlighted Preview</h3>
+            <span class="hint">Read-only preview of the YAML below</span>
+          </div>
+          <pre id="configPreview" class="code-preview empty">Load config to preview.</pre>
+        </section>
         <textarea id="configEditor" spellcheck="false"></textarea>
         <div id="configStatus" class="status-line"></div>
       </section>
