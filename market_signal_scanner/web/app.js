@@ -46,14 +46,24 @@ async function createJob(payload) {
 
 async function createJobWithStatus(payload, statusId, startingMessage) {
   const status = $(statusId);
+  const button = payload.command === 'agent' ? $('runAgent') : null;
   if (status) status.textContent = startingMessage;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Starting...';
+  }
   try {
     const job = await createJob(payload);
     if (status) status.textContent = `${job.command} job started. Status: ${job.status}.`;
+    if (button) button.textContent = 'Agent Running...';
     return job;
   } catch (error) {
     if (status) status.textContent = `Could not start ${payload.command}: ${error.message}`;
-    throw error;
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Run Agent';
+    }
+    return null;
   }
 }
 
@@ -98,6 +108,13 @@ function renderJobPageStatus(job) {
   const output = job.output_dir ? ` Output: agents/${job.output_dir}.` : '';
   const error = job.error ? ` Error: ${job.error}.` : '';
   status.textContent = `Agent job ${job.status}.${output}${error}`;
+  if (job.status === 'completed' || job.status === 'failed') {
+    const button = $('runAgent');
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Run Agent';
+    }
+  }
 }
 
 async function loadJobs() {
@@ -400,10 +417,17 @@ function wireActions() {
     no_rsi: $('hideRsi').checked,
     no_macd: $('hideMacd').checked,
   }));
-  $('runAgent').addEventListener('click', () => createJobWithStatus({
-    command: 'agent',
-    ticker: $('agentTicker').value.trim(),
-  }, 'agentStatus', 'Starting agent research...'));
+  $('runAgent').addEventListener('click', () => {
+    const ticker = $('agentTicker').value.trim();
+    if (!ticker) {
+      $('agentStatus').textContent = 'Enter a ticker before running Agent Research.';
+      return;
+    }
+    createJobWithStatus({
+      command: 'agent',
+      ticker,
+    }, 'agentStatus', 'Starting agent research...');
+  });
   $('refreshRuns').addEventListener('click', loadRuns);
   $('refreshJobs').addEventListener('click', loadJobs);
   $('refreshJobsPage').addEventListener('click', loadJobs);
