@@ -248,9 +248,11 @@ async function loadLlmStatus() {
   const configBox = $('llmConfig');
   const statusBox = $('llmStatus');
   const modelsBox = $('llmModels');
+  $('llmActionStatus').textContent = 'Checking LLM status...';
   try {
     const status = await (await api('/api/llm/status')).json();
     renderLlmStatus(status);
+    $('llmActionStatus').textContent = `Status checked at ${new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}.`;
   } catch (error) {
     configBox.className = 'detail-list';
     configBox.innerHTML = `<div class="danger">${escapeHtml(error.message)}</div>`;
@@ -271,7 +273,7 @@ function renderLlmStatus(status) {
 
   const serverBadge = status.server_running ? '<span class="badge completed">running</span>' : '<span class="badge failed">not running</span>';
   const modelBadge = status.model_available ? '<span class="badge completed">available</span>' : '<span class="badge queued">missing</span>';
-  const owner = status.managed_by_app ? 'Started by this app' : 'External or not running';
+  const owner = llmProcessOwner(status);
   $('llmStatus').className = 'detail-list';
   $('llmStatus').innerHTML = `
     <div><span>Ollama server</span>${serverBadge}</div>
@@ -282,6 +284,8 @@ function renderLlmStatus(status) {
 
   $('startLlm').disabled = !status.can_start || status.server_running;
   $('stopLlm').disabled = !status.can_stop;
+  $('startLlm').textContent = status.server_running ? 'Already Running' : 'Start Ollama';
+  $('stopLlm').textContent = status.server_running && !status.can_stop ? 'External Process' : 'Stop Ollama';
   $('llmModels').className = 'model-list';
   if (status.installed_models && status.installed_models.length) {
     $('llmModels').innerHTML = status.installed_models.map((model) => {
@@ -293,6 +297,31 @@ function renderLlmStatus(status) {
   } else {
     $('llmModels').innerHTML = `<span class="muted">Start Ollama, then install the configured model with <code>ollama pull ${escapeHtml(status.model)}</code>.</span>`;
   }
+
+  renderLlmHelp(status);
+}
+
+function llmProcessOwner(status) {
+  if (status.managed_by_app) return 'Started by this app';
+  if (status.server_running) return 'Started outside this app';
+  return 'Not running';
+}
+
+function renderLlmHelp(status) {
+  const notes = [];
+  if (status.server_running) {
+    notes.push('Start is disabled because Ollama is already running.');
+  }
+  if (status.server_running && !status.can_stop) {
+    notes.push('Stop is disabled because this app did not start the current Ollama process.');
+  }
+  if (!status.model_available) {
+    notes.push(`Install the configured model with: ollama pull ${status.model}`);
+  }
+  if (!notes.length) {
+    notes.push('The configured LLM is ready for Agent Research.');
+  }
+  $('llmHelp').innerHTML = notes.map((note) => `<div>${escapeHtml(note)}</div>`).join('');
 }
 
 async function startLlm() {
