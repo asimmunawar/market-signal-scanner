@@ -22,6 +22,7 @@
         <button class="nav-button active" data-tab="run">Run</button>
         <button class="nav-button" data-tab="chart">Chart</button>
         <button class="nav-button" data-tab="agent">Agent</button>
+        <button class="nav-button" data-tab="llm">LLM</button>
         <button class="nav-button" data-tab="outputs">Outputs</button>
         <button class="nav-button" data-tab="config">Config</button>
         <button class="nav-button" data-tab="jobs">Jobs</button>
@@ -106,6 +107,35 @@
           <p class="hint">Writes to <code>output/agents/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. LLM settings live in <code>config.yaml</code>.</p>
         </section>
         <section id="agentPreview" class="panel preview empty">No agent report generated in this session yet.</section>
+      </section>
+
+      <section id="tab-llm" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Connected LLM</h2>
+            <p>Manage the configured local or connected language model used by app features.</p>
+          </div>
+          <button id="refreshLlm" class="ghost">Check Status</button>
+        </div>
+        <div class="grid two">
+          <section class="panel">
+            <h3>Configured Model</h3>
+            <div id="llmConfig" class="detail-list muted">Loading LLM config...</div>
+            <div class="button-row llm-actions">
+              <button id="startLlm" class="primary">Start Ollama</button>
+              <button id="stopLlm" class="ghost">Stop Ollama</button>
+            </div>
+            <div id="llmActionStatus" class="status-line"></div>
+          </section>
+          <section class="panel">
+            <h3>Status</h3>
+            <div id="llmStatus" class="detail-list muted">No status loaded yet.</div>
+          </section>
+        </div>
+        <section class="panel live-panel">
+          <h3>Installed Models</h3>
+          <div id="llmModels" class="model-list muted">Check status to view installed models.</div>
+        </section>
       </section>
 
       <section id="tab-outputs" class="tab">

@@ -11,7 +11,7 @@ The app analyzes a user-defined ticker universe, computes market signals, ranks 
 - Config-driven ticker universe from `config.yaml`
 - Optional group expansion for S&P 500, Nasdaq-100, Dow, and major crypto tickers
 - Local FastAPI web GUI for running scans, backtests, charts, agent research, and viewing outputs
-- CLI support for scan, backtest, and chart modes
+- CLI support for scan, backtest, chart, and agent modes
 - Cached `yfinance` price/fundamental data
 - Technical signals: returns, volatility, drawdown, SMA/EMA, RSI, MACD, stochastic, volume spikes
 - Optional fundamentals: market cap, P/E, PEG, price/book, growth, margins, debt/equity, free cash flow, dividend yield, analyst recommendation
@@ -30,6 +30,7 @@ The local GUI can:
 - run historical backtests
 - generate ticker charts
 - generate ticker research reports
+- check/start app-managed local Ollama from the LLM page
 - browse output history
 - preview Markdown reports
 - preview CSV files with clickable finance links
@@ -224,6 +225,8 @@ If Ollama is not running or the model is unavailable, the command still writes a
 - `agent_report.md`
 - `<TICKER>_sources.csv`
 - `<TICKER>_agent_context.json`
+
+The GUI also includes an **LLM** page that shows the configured provider, model, server URL, Ollama status, installed models, and whether the selected model is available. For local Ollama, the GUI can start the server. It only stops Ollama if this app started that process.
 
 ## Configuration
 

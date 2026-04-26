@@ -16,6 +16,7 @@ function initTabs() {
       if (button.dataset.tab === 'outputs') loadRuns();
       if (button.dataset.tab === 'jobs') loadJobs();
       if (button.dataset.tab === 'config') loadConfig();
+      if (button.dataset.tab === 'llm') loadLlmStatus();
     });
   });
 }
@@ -243,6 +244,79 @@ async function saveConfig() {
   }
 }
 
+async function loadLlmStatus() {
+  const configBox = $('llmConfig');
+  const statusBox = $('llmStatus');
+  const modelsBox = $('llmModels');
+  try {
+    const status = await (await api('/api/llm/status')).json();
+    renderLlmStatus(status);
+  } catch (error) {
+    configBox.className = 'detail-list';
+    configBox.innerHTML = `<div class="danger">${escapeHtml(error.message)}</div>`;
+    statusBox.className = 'detail-list';
+    statusBox.innerHTML = '<div class="muted">Could not load LLM status.</div>';
+    modelsBox.className = 'model-list muted';
+    modelsBox.textContent = 'No models loaded.';
+  }
+}
+
+function renderLlmStatus(status) {
+  $('llmConfig').className = 'detail-list';
+  $('llmConfig').innerHTML = `
+    <div><span>Provider</span><strong>${escapeHtml(status.provider)}</strong></div>
+    <div><span>Model</span><strong>${escapeHtml(status.model)}</strong></div>
+    <div><span>Server</span><code>${escapeHtml(status.base_url)}</code></div>
+  `;
+
+  const serverBadge = status.server_running ? '<span class="badge completed">running</span>' : '<span class="badge failed">not running</span>';
+  const modelBadge = status.model_available ? '<span class="badge completed">available</span>' : '<span class="badge queued">missing</span>';
+  const owner = status.managed_by_app ? 'Started by this app' : 'External or not running';
+  $('llmStatus').className = 'detail-list';
+  $('llmStatus').innerHTML = `
+    <div><span>Ollama server</span>${serverBadge}</div>
+    <div><span>Configured model</span>${modelBadge}</div>
+    <div><span>Process control</span><strong>${escapeHtml(owner)}</strong></div>
+    ${status.error ? `<div><span>Last error</span><strong class="danger">${escapeHtml(status.error)}</strong></div>` : ''}
+  `;
+
+  $('startLlm').disabled = !status.can_start || status.server_running;
+  $('stopLlm').disabled = !status.can_stop;
+  $('llmModels').className = 'model-list';
+  if (status.installed_models && status.installed_models.length) {
+    $('llmModels').innerHTML = status.installed_models.map((model) => {
+      const selected = model === status.model ? ' selected' : '';
+      return `<span class="model-pill${selected}">${escapeHtml(model)}</span>`;
+    }).join('');
+  } else if (status.server_running) {
+    $('llmModels').innerHTML = '<span class="muted">Ollama is running, but no installed models were reported.</span>';
+  } else {
+    $('llmModels').innerHTML = `<span class="muted">Start Ollama, then install the configured model with <code>ollama pull ${escapeHtml(status.model)}</code>.</span>`;
+  }
+}
+
+async function startLlm() {
+  await runLlmAction('/api/llm/start', 'Starting Ollama...');
+}
+
+async function stopLlm() {
+  const confirmed = window.confirm('Stop the Ollama server started by this app?');
+  if (!confirmed) return;
+  await runLlmAction('/api/llm/stop', 'Stopping Ollama...');
+}
+
+async function runLlmAction(path, pendingMessage) {
+  $('llmActionStatus').textContent = pendingMessage;
+  try {
+    const status = await (await api(path, { method: 'POST' })).json();
+    renderLlmStatus(status);
+    $('llmActionStatus').textContent = status.message || 'Done.';
+  } catch (error) {
+    $('llmActionStatus').textContent = error.message;
+    await loadLlmStatus();
+  }
+}
+
 
 async function shutdownServer() {
   const confirmed = window.confirm('Stop the local market-signal-scanner GUI server? You will need to restart it from Terminal to use the GUI again.');
@@ -281,6 +355,9 @@ function wireActions() {
   $('refreshRuns').addEventListener('click', loadRuns);
   $('refreshJobs').addEventListener('click', loadJobs);
   $('refreshJobsPage').addEventListener('click', loadJobs);
+  $('refreshLlm').addEventListener('click', loadLlmStatus);
+  $('startLlm').addEventListener('click', startLlm);
+  $('stopLlm').addEventListener('click', stopLlm);
   $('loadConfig').addEventListener('click', loadConfig);
   $('saveConfig').addEventListener('click', saveConfig);
   $('shutdownServer').addEventListener('click', shutdownServer);
@@ -481,3 +558,4 @@ wireActions();
 loadRuns();
 loadJobs();
 loadConfig();
+loadLlmStatus();

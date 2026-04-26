@@ -7,16 +7,20 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from market_signal_scanner.config_loader import load_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +67,8 @@ class Job:
 app = FastAPI(title="market-signal-scanner GUI")
 jobs: dict[str, Job] = {}
 jobs_lock = threading.Lock()
+managed_ollama_process: Optional[subprocess.Popen[str]] = None
+llm_lock = threading.Lock()
 
 
 @app.get("/")
@@ -77,6 +83,78 @@ app.mount("/static", StaticFiles(directory=WEB_ROOT), name="static")
 def shutdown_server() -> dict[str, Any]:
     threading.Timer(0.5, stop_process).start()
     return {"ok": True, "message": "Server shutdown requested."}
+
+
+@app.get("/api/llm/status")
+def llm_status() -> dict[str, Any]:
+    return get_llm_status()
+
+
+@app.post("/api/llm/start")
+def start_llm() -> dict[str, Any]:
+    config = load_config(CONFIG_PATH)
+    if config.agent.provider != "ollama":
+        raise HTTPException(status_code=400, detail="Start is only supported for local Ollama provider")
+
+    status = get_llm_status()
+    if status["server_running"]:
+        return status | {"ok": True, "message": "Ollama is already running."}
+
+    global managed_ollama_process
+    already_starting = False
+    with llm_lock:
+        if managed_ollama_process and managed_ollama_process.poll() is None:
+            already_starting = True
+        else:
+            try:
+                devnull = open(os.devnull, "w", encoding="utf-8")
+                managed_ollama_process = subprocess.Popen(
+                    ["ollama", "serve"],
+                    cwd=PROJECT_ROOT,
+                    text=True,
+                    stdout=devnull,
+                    stderr=devnull,
+                )
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Ollama command not found. Install Ollama first.")
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Could not start Ollama: {exc}")
+
+    if already_starting:
+        return get_llm_status() | {"ok": True, "message": "Ollama is starting."}
+
+    for _ in range(15):
+        time.sleep(0.4)
+        status = get_llm_status()
+        if status["server_running"]:
+            return status | {"ok": True, "message": "Ollama started."}
+    return get_llm_status() | {"ok": False, "message": "Ollama start was requested, but the server is not reachable yet."}
+
+
+@app.post("/api/llm/stop")
+def stop_llm() -> dict[str, Any]:
+    global managed_ollama_process
+    with llm_lock:
+        if not managed_ollama_process or managed_ollama_process.poll() is not None:
+            should_stop = False
+        else:
+            should_stop = True
+            process = managed_ollama_process
+    if not should_stop:
+        return get_llm_status() | {
+            "ok": False,
+            "message": "This app did not start the running Ollama server. Stop it outside the app if needed.",
+        }
+    with llm_lock:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        managed_ollama_process = None
+    return get_llm_status() | {"ok": True, "message": "Ollama stopped."}
 
 
 def stop_process() -> None:
@@ -298,6 +376,47 @@ def serialize_job(job: Job) -> dict[str, Any]:
         "logs": job.logs,
         "error": job.error,
         "run_kind": kind_for_command(job.command),
+    }
+
+
+def get_llm_status() -> dict[str, Any]:
+    config = load_config(CONFIG_PATH)
+    agent = config.agent
+    model_names: list[str] = []
+    server_running = False
+    model_available = False
+    error = None
+    if agent.provider == "ollama":
+        try:
+            response = requests.get(f"{agent.base_url}/api/tags", timeout=2)
+            response.raise_for_status()
+            server_running = True
+            data = response.json()
+            model_names = sorted(
+                str(item.get("name", ""))
+                for item in data.get("models", [])
+                if isinstance(item, dict) and item.get("name")
+            )
+            model_available = agent.model in model_names
+        except Exception as exc:
+            error = str(exc)
+    else:
+        error = f"Status checks are not implemented for provider '{agent.provider}'"
+
+    with llm_lock:
+        managed_by_app = bool(managed_ollama_process and managed_ollama_process.poll() is None)
+
+    return {
+        "provider": agent.provider,
+        "model": agent.model,
+        "base_url": agent.base_url,
+        "server_running": server_running,
+        "model_available": model_available,
+        "installed_models": model_names,
+        "managed_by_app": managed_by_app,
+        "can_start": agent.provider == "ollama",
+        "can_stop": agent.provider == "ollama" and managed_by_app,
+        "error": None if server_running else error,
     }
 
 
