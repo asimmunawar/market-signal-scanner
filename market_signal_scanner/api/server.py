@@ -259,23 +259,35 @@ def run_job(job_id: str, request: JobRequest) -> None:
     before = set(run_names(kind_for_command(request.command)))
     args = build_cli_args(request)
     try:
-        process = subprocess.run(
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        process = subprocess.Popen(
             args,
             cwd=PROJECT_ROOT,
+            env=env,
             text=True,
-            capture_output=True,
-            timeout=None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
         )
+        logs: list[str] = []
+        if process.stdout is not None:
+            for line in process.stdout:
+                logs.append(line.rstrip())
+                with jobs_lock:
+                    job = jobs[job_id]
+                    job.logs = "\n".join(logs[-800:])
+        returncode = process.wait()
         after = set(run_names(kind_for_command(request.command)))
         new_runs = sorted(after - before)
         output_dir = newest_run(kind_for_command(request.command), preferred=new_runs)
         with jobs_lock:
             job = jobs[job_id]
-            job.returncode = process.returncode
-            job.logs = ((process.stdout or "") + "\n" + (process.stderr or "")).strip()
+            job.returncode = returncode
+            job.logs = "\n".join(logs).strip()
             job.output_dir = output_dir.name if output_dir else None
-            job.status = "completed" if process.returncode == 0 else "failed"
-            job.error = None if process.returncode == 0 else f"Command exited with {process.returncode}"
+            job.status = "completed" if returncode == 0 else "failed"
+            job.error = None if returncode == 0 else f"Command exited with {returncode}"
             job.finished_at = datetime.now().isoformat(timespec="seconds")
     except Exception as exc:
         with jobs_lock:

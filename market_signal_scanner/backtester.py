@@ -40,7 +40,12 @@ def run_backtest(prices: dict[str, pd.DataFrame], config: BacktestConfig, output
 
     rebalance_dates = scheduled_dates(close.index, config.rebalance_frequency)
     contribution_dates = set(scheduled_dates(close.index, config.contribution_frequency))
-    LOGGER.info("Backtest window has %d price dates and %d rebalance dates", len(close.index), len(rebalance_dates))
+    LOGGER.info(
+        "Backtest window has %d price dates, %d tickers, and %d rebalance dates",
+        len(close.index),
+        len(close.columns),
+        len(rebalance_dates),
+    )
 
     cash = float(config.initial_cash)
     total_contributions = float(config.initial_cash)
@@ -53,6 +58,7 @@ def run_backtest(prices: dict[str, pd.DataFrame], config: BacktestConfig, output
     score_rows: list[dict[str, Any]] = []
 
     rebalance_set = set(rebalance_dates)
+    rebalance_number = 0
     cost_rate = config.transaction_cost_bps / 10000
     slippage_rate = config.slippage_bps / 10000
 
@@ -64,14 +70,22 @@ def run_backtest(prices: dict[str, pd.DataFrame], config: BacktestConfig, output
             total_contributions += config.contribution_amount
 
         if date in rebalance_set:
+            rebalance_number += 1
+            LOGGER.info("Backtest rebalance %d/%d on %s", rebalance_number, len(rebalance_dates), date.date())
             scored = score_as_of(date, prices, config)
             if not scored.empty:
                 scored = scored.copy()
                 scored.insert(0, "date", date)
                 score_rows.extend(scored.to_dict("records"))
                 latest_targets = select_targets(scored, config)
+                LOGGER.info(
+                    "Scored %d tickers; selected %d targets",
+                    len(scored),
+                    len(latest_targets),
+                )
             else:
                 latest_targets = pd.DataFrame()
+                LOGGER.info("No tickers had enough history to score on %s", date.date())
             cash, trade_batch = rebalance_portfolio(
                 date=date,
                 cash=cash,
@@ -82,6 +96,7 @@ def run_backtest(prices: dict[str, pd.DataFrame], config: BacktestConfig, output
                 slippage_rate=slippage_rate,
             )
             trade_rows.extend(trade_batch)
+            LOGGER.info("Generated %d trades on %s", len(trade_batch), date.date())
 
         portfolio_value = portfolio_market_value(cash, shares, prices_today)
         equity_rows.append(
