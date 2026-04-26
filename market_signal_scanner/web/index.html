@@ -103,7 +103,7 @@
           <div class="form-grid agent-form">
             <label>Ticker<input id="agentTicker" value="AAPL" /></label>
           </div>
-          <button id="runAgent" class="primary">Run Agent</button>
+          <button id="runAgent" class="primary" type="button">Run Agent</button>
           <div id="agentStatus" class="status-line"></div>
           <p class="hint">Writes to <code>output/agents/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. LLM settings live in <code>config.yaml</code>.</p>
         </section>
@@ -185,6 +185,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260426-agent-button"></script>
 </body>
 </html>

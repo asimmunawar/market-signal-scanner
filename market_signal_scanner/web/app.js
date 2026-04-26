@@ -6,6 +6,17 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+window.addEventListener('error', (event) => {
+  const status = $('agentStatus');
+  if (status) status.textContent = `Browser error: ${event.message}`;
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  const status = $('agentStatus');
+  const message = event.reason && event.reason.message ? event.reason.message : String(event.reason || 'Unknown promise error');
+  if (status) status.textContent = `Request error: ${message}`;
+});
+
 function initTabs() {
   document.querySelectorAll('.nav-button').forEach((button) => {
     button.addEventListener('click', () => {
@@ -65,6 +76,34 @@ async function createJobWithStatus(payload, statusId, startingMessage) {
     }
     return null;
   }
+}
+
+function runAgentFromUi() {
+  const tickerInput = $('agentTicker');
+  const status = $('agentStatus');
+  if (!tickerInput) {
+    if (status) status.textContent = 'Agent ticker input was not found. Refresh the page.';
+    return;
+  }
+  const ticker = tickerInput.value.trim();
+  if (!ticker) {
+    if (status) status.textContent = 'Enter a ticker before running Agent Research.';
+    return;
+  }
+  createJobWithStatus({
+    command: 'agent',
+    ticker,
+  }, 'agentStatus', 'Starting agent research...');
+}
+
+function wireAgentAction() {
+  const button = $('runAgent');
+  if (!button || button.dataset.wired === 'true') return;
+  button.dataset.wired = 'true';
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    runAgentFromUi();
+  });
 }
 
 function startPolling(jobId) {
@@ -401,6 +440,7 @@ async function shutdownServer() {
 }
 
 function wireActions() {
+  wireAgentAction();
   $('runScan').addEventListener('click', () => createJob({ command: 'scan', skip_fundamentals: $('scanSkipFundamentals').checked }));
   $('runBacktest').addEventListener('click', () => createJob({ command: 'backtest' }));
   $('runChart').addEventListener('click', () => createJob({
@@ -417,17 +457,6 @@ function wireActions() {
     no_rsi: $('hideRsi').checked,
     no_macd: $('hideMacd').checked,
   }));
-  $('runAgent').addEventListener('click', () => {
-    const ticker = $('agentTicker').value.trim();
-    if (!ticker) {
-      $('agentStatus').textContent = 'Enter a ticker before running Agent Research.';
-      return;
-    }
-    createJobWithStatus({
-      command: 'agent',
-      ticker,
-    }, 'agentStatus', 'Starting agent research...');
-  });
   $('refreshRuns').addEventListener('click', loadRuns);
   $('refreshJobs').addEventListener('click', loadJobs);
   $('refreshJobsPage').addEventListener('click', loadJobs);
