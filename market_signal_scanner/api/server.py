@@ -5,6 +5,7 @@ import csv
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -74,6 +75,11 @@ class Job:
     output_dir: Optional[str] = None
     logs: str = ""
     error: Optional[str] = None
+    process: Optional[subprocess.Popen[str]] = field(default=None, repr=False, compare=False)
+
+
+class SessionCancelled(RuntimeError):
+    pass
 
 
 app = FastAPI(title="market-signal-scanner GUI")
@@ -214,6 +220,7 @@ def create_oracle_session() -> dict[str, Any]:
         "sources": [],
         "market_pulse": [],
         "error": None,
+        "cancel_requested": False,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
     }
@@ -233,6 +240,20 @@ def get_oracle_session(session_id: str) -> dict[str, Any]:
     return serialize_oracle_session(session)
 
 
+@app.post("/api/oracle/sessions/{session_id}/cancel")
+def cancel_oracle_session(session_id: str) -> dict[str, Any]:
+    with oracle_lock:
+        session = oracle_sessions.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Oracle session not found")
+        if session["status"] in {"completed", "failed", "cancelled"}:
+            return serialize_oracle_session(session)
+        session["cancel_requested"] = True
+        session["status"] = "cancelling"
+        session["events"].append({"kind": "observation", "message": "Cancel requested by user.", "created_at": datetime.now().isoformat(timespec="seconds")})
+        return serialize_oracle_session(session)
+
+
 @app.post("/api/agent/sessions")
 def create_agent_session(request: AgentStartRequest) -> dict[str, Any]:
     if not request.query.strip() and not (request.ticker or "").strip():
@@ -244,11 +265,12 @@ def create_agent_session(request: AgentStartRequest) -> dict[str, Any]:
         "ticker": (request.ticker or "").strip().upper(),
         "query": request.query.strip(),
         "events": [],
-        "messages": [],
+        "messages": [{"role": "user", "content": request.query.strip() or (request.ticker or "").strip().upper(), "created_at": datetime.now().isoformat(timespec="seconds")}],
         "output_dir": None,
         "report": "",
         "sources": [],
         "error": None,
+        "cancel_requested": False,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
         "context_path": None,
@@ -267,6 +289,20 @@ def get_agent_session(session_id: str) -> dict[str, Any]:
     if session is None:
         raise HTTPException(status_code=404, detail="Agent session not found")
     return serialize_agent_session(session)
+
+
+@app.post("/api/agent/sessions/{session_id}/cancel")
+def cancel_agent_session(session_id: str) -> dict[str, Any]:
+    with agent_lock:
+        session = agent_sessions.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Agent session not found")
+        if session["status"] in {"completed", "failed", "cancelled"}:
+            return serialize_agent_session(session)
+        session["cancel_requested"] = True
+        session["status"] = "cancelling"
+        session["events"].append({"kind": "observation", "message": "Cancel requested by user.", "created_at": datetime.now().isoformat(timespec="seconds")})
+        return serialize_agent_session(session)
 
 
 @app.post("/api/agent/sessions/{session_id}/messages")
@@ -306,6 +342,28 @@ def run_detail(kind: str, run_id: str) -> dict[str, Any]:
         if path.is_file():
             files.append({"name": path.name, "size": path.stat().st_size, "url": f"/api/files/{kind}/{run_id}/{path.name}"})
     return {"kind": kind, "run_id": run_id, "path": str(run_dir), "files": files}
+
+
+@app.delete("/api/runs/{kind}/{run_id}")
+def delete_run(kind: str, run_id: str) -> dict[str, Any]:
+    run_dir = safe_run_dir(kind, run_id)
+    shutil.rmtree(run_dir)
+    return {"ok": True, "kind": kind, "run_id": run_id, "message": "Run deleted."}
+
+
+@app.delete("/api/runs/{kind}")
+def delete_runs_for_kind(kind: str) -> dict[str, Any]:
+    if kind not in {"scans", "backtests", "charts", "news", "agents", "oracle"}:
+        raise HTTPException(status_code=400, detail="Invalid run kind")
+    root = (OUTPUT_ROOT / kind).resolve()
+    if not root.exists():
+        return {"ok": True, "kind": kind, "deleted": 0}
+    deleted = 0
+    for path in root.iterdir():
+        if path.is_dir():
+            shutil.rmtree(path)
+            deleted += 1
+    return {"ok": True, "kind": kind, "deleted": deleted}
 
 
 @app.get("/api/files/{kind}/{run_id}/{filename:path}")
@@ -355,6 +413,18 @@ def list_jobs() -> list[dict[str, Any]]:
         return [serialize_job(job) for job in sorted(jobs.values(), key=lambda item: item.created_at, reverse=True)]
 
 
+@app.get("/api/activity")
+def list_activity() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    with jobs_lock:
+        items.extend(serialize_job(job) for job in jobs.values())
+    with agent_lock:
+        items.extend(serialize_agent_activity(session) for session in agent_sessions.values())
+    with oracle_lock:
+        items.extend(serialize_oracle_activity(session) for session in oracle_sessions.values())
+    return sorted(items, key=lambda item: item.get("created_at") or "", reverse=True)
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict[str, Any]:
     with jobs_lock:
@@ -364,9 +434,39 @@ def get_job(job_id: str) -> dict[str, Any]:
     return serialize_job(job)
 
 
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict[str, Any]:
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if job.status in {"completed", "failed", "cancelled"}:
+            return serialize_job(job)
+        job.status = "cancelling"
+        job.error = "Cancel requested by user."
+        process = job.process
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    with jobs_lock:
+        job = jobs[job_id]
+        if job.status not in {"completed", "failed", "cancelled"}:
+            job.status = "cancelled"
+            job.returncode = job.returncode if job.returncode is not None else -signal.SIGTERM
+            job.finished_at = datetime.now().isoformat(timespec="seconds")
+    return serialize_job(job)
+
+
 def run_job(job_id: str, request: JobRequest) -> None:
     with jobs_lock:
         job = jobs[job_id]
+        if job.status in {"cancelling", "cancelled"}:
+            job.status = "cancelled"
+            job.finished_at = datetime.now().isoformat(timespec="seconds")
+            return
         job.status = "running"
         job.started_at = datetime.now().isoformat(timespec="seconds")
 
@@ -384,6 +484,8 @@ def run_job(job_id: str, request: JobRequest) -> None:
             stderr=subprocess.STDOUT,
             bufsize=1,
         )
+        with jobs_lock:
+            jobs[job_id].process = process
         logs: list[str] = []
         if process.stdout is not None:
             for line in process.stdout:
@@ -400,26 +502,38 @@ def run_job(job_id: str, request: JobRequest) -> None:
             job.returncode = returncode
             job.logs = "\n".join(logs).strip()
             job.output_dir = output_dir.name if output_dir else None
-            job.status = "completed" if returncode == 0 else "failed"
-            job.error = None if returncode == 0 else f"Command exited with {returncode}"
+            if job.status == "cancelling":
+                job.status = "cancelled"
+                job.error = "Cancelled by user."
+            else:
+                job.status = "completed" if returncode == 0 else "failed"
+                job.error = None if returncode == 0 else f"Command exited with {returncode}"
             job.finished_at = datetime.now().isoformat(timespec="seconds")
+            job.process = None
     except Exception as exc:
         with jobs_lock:
             job = jobs[job_id]
             job.status = "failed"
             job.error = str(exc)
             job.finished_at = datetime.now().isoformat(timespec="seconds")
+            job.process = None
 
 
 def run_agent_session(session_id: str) -> None:
     with agent_lock:
         session = agent_sessions[session_id]
+        if session.get("cancel_requested"):
+            session["status"] = "cancelled"
+            session["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            return
         session["status"] = "running"
         session["events"].append({"kind": "thought", "message": "Starting ReAct financial research agent.", "created_at": datetime.now().isoformat(timespec="seconds")})
 
     def progress(kind: str, message: str) -> None:
         with agent_lock:
             current = agent_sessions[session_id]
+            if current.get("cancel_requested"):
+                raise SessionCancelled("Agent cancelled by user.")
             current["events"].append({"kind": kind, "message": message, "created_at": datetime.now().isoformat(timespec="seconds")})
 
     try:
@@ -446,24 +560,38 @@ def run_agent_session(session_id: str) -> None:
             saved_event = {"kind": "observation", "message": f"Saved agent outputs to agents/{result.output_dir.name}.", "created_at": session["finished_at"]}
             session["events"].append(saved_event)
         append_agent_log_event(result.output_dir, saved_event)
+    except SessionCancelled as exc:
+        with agent_lock:
+            session = agent_sessions[session_id]
+            session["status"] = "cancelled"
+            session["error"] = str(exc)
+            session["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            session["events"].append({"kind": "observation", "message": str(exc), "created_at": session["finished_at"]})
     except Exception as exc:
         with agent_lock:
             session = agent_sessions[session_id]
-            session["status"] = "failed"
+            session["status"] = "cancelled" if session.get("cancel_requested") else "failed"
             session["error"] = str(exc)
             session["finished_at"] = datetime.now().isoformat(timespec="seconds")
-            session["events"].append({"kind": "observation", "message": f"Agent failed: {exc}", "created_at": session["finished_at"]})
+            label = "Agent cancelled" if session.get("cancel_requested") else "Agent failed"
+            session["events"].append({"kind": "observation", "message": f"{label}: {exc}", "created_at": session["finished_at"]})
 
 
 def run_oracle_session(session_id: str) -> None:
     with oracle_lock:
         session = oracle_sessions[session_id]
+        if session.get("cancel_requested"):
+            session["status"] = "cancelled"
+            session["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            return
         session["status"] = "running"
         session["events"].append({"kind": "thought", "message": "Starting Oracle market disruption scan.", "created_at": datetime.now().isoformat(timespec="seconds")})
 
     def progress(kind: str, message: str) -> None:
         with oracle_lock:
             current = oracle_sessions[session_id]
+            if current.get("cancel_requested"):
+                raise SessionCancelled("Oracle cancelled by user.")
             current["events"].append({"kind": kind, "message": message, "created_at": datetime.now().isoformat(timespec="seconds")})
 
     try:
@@ -480,13 +608,21 @@ def run_oracle_session(session_id: str) -> None:
             saved_event = {"kind": "observation", "message": f"Saved Oracle outputs to oracle/{result.output_dir.name}.", "created_at": session["finished_at"]}
             session["events"].append(saved_event)
         append_oracle_log_event(result.output_dir, saved_event)
+    except SessionCancelled as exc:
+        with oracle_lock:
+            session = oracle_sessions[session_id]
+            session["status"] = "cancelled"
+            session["error"] = str(exc)
+            session["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            session["events"].append({"kind": "observation", "message": str(exc), "created_at": session["finished_at"]})
     except Exception as exc:
         with oracle_lock:
             session = oracle_sessions[session_id]
-            session["status"] = "failed"
+            session["status"] = "cancelled" if session.get("cancel_requested") else "failed"
             session["error"] = str(exc)
             session["finished_at"] = datetime.now().isoformat(timespec="seconds")
-            session["events"].append({"kind": "observation", "message": f"Oracle failed: {exc}", "created_at": session["finished_at"]})
+            label = "Oracle cancelled" if session.get("cancel_requested") else "Oracle failed"
+            session["events"].append({"kind": "observation", "message": f"{label}: {exc}", "created_at": session["finished_at"]})
 
 
 def build_cli_args(request: JobRequest) -> list[str]:
@@ -570,7 +706,9 @@ def csv_preview(path: Path, limit: int = 100) -> list[dict[str, str]]:
 def serialize_job(job: Job) -> dict[str, Any]:
     return {
         "id": job.id,
+        "activity_type": "job",
         "command": job.command,
+        "title": job.command,
         "status": job.status,
         "created_at": job.created_at,
         "started_at": job.started_at,
@@ -580,7 +718,55 @@ def serialize_job(job: Job) -> dict[str, Any]:
         "logs": job.logs,
         "error": job.error,
         "run_kind": kind_for_command(job.command),
+        "cancellable": job.status in {"queued", "running", "cancelling"},
+        "cancel_url": f"/api/jobs/{job.id}/cancel",
     }
+
+
+def serialize_agent_activity(session: dict[str, Any]) -> dict[str, Any]:
+    ticker = session.get("ticker") or ""
+    query = session.get("query") or ""
+    return {
+        "id": session["id"],
+        "activity_type": "agent",
+        "command": "agent",
+        "title": f"agent {ticker}".strip() if ticker else "agent research",
+        "subtitle": query,
+        "status": session["status"],
+        "created_at": session.get("created_at"),
+        "started_at": session.get("created_at"),
+        "finished_at": session.get("finished_at"),
+        "output_dir": session.get("output_dir"),
+        "run_kind": "agents",
+        "logs": format_session_events(session.get("events", [])),
+        "error": session.get("error"),
+        "cancellable": session["status"] in {"queued", "running", "cancelling"},
+        "cancel_url": f"/api/agent/sessions/{session['id']}/cancel",
+    }
+
+
+def serialize_oracle_activity(session: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": session["id"],
+        "activity_type": "oracle",
+        "command": "oracle",
+        "title": "oracle",
+        "subtitle": "early trend discovery",
+        "status": session["status"],
+        "created_at": session.get("created_at"),
+        "started_at": session.get("created_at"),
+        "finished_at": session.get("finished_at"),
+        "output_dir": session.get("output_dir"),
+        "run_kind": "oracle",
+        "logs": format_session_events(session.get("events", [])),
+        "error": session.get("error"),
+        "cancellable": session["status"] in {"queued", "running", "cancelling"},
+        "cancel_url": f"/api/oracle/sessions/{session['id']}/cancel",
+    }
+
+
+def format_session_events(events: list[dict[str, Any]]) -> str:
+    return "\n".join(f"{event.get('created_at', '')} [{event.get('kind', 'event')}] {event.get('message', '')}" for event in events[-200:])
 
 
 def serialize_agent_session(session: dict[str, Any]) -> dict[str, Any]:
@@ -597,6 +783,7 @@ def serialize_agent_session(session: dict[str, Any]) -> dict[str, Any]:
         "sources": session.get("sources", []),
         "market_pulse": session.get("market_pulse", []),
         "error": session.get("error"),
+        "cancel_requested": session.get("cancel_requested", False),
         "created_at": session.get("created_at"),
         "finished_at": session.get("finished_at"),
     }
@@ -611,7 +798,9 @@ def serialize_oracle_session(session: dict[str, Any]) -> dict[str, Any]:
         "run_kind": "oracle",
         "report": session.get("report", ""),
         "sources": session.get("sources", []),
+        "market_pulse": session.get("market_pulse", []),
         "error": session.get("error"),
+        "cancel_requested": session.get("cancel_requested", False),
         "created_at": session.get("created_at"),
         "finished_at": session.get("finished_at"),
     }

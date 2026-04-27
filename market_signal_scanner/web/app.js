@@ -5,6 +5,7 @@ const state = {
   agentPollTimer: null,
   oracleSessionId: null,
   oraclePollTimer: null,
+  activityPollTimer: null,
   runs: null,
 };
 
@@ -29,7 +30,7 @@ function initTabs() {
       button.classList.add('active');
       $(`tab-${button.dataset.tab}`).classList.add('active');
       if (button.dataset.tab === 'outputs') loadRuns();
-      if (button.dataset.tab === 'jobs') loadJobs();
+      if (button.dataset.tab === 'activity') loadActivity();
       if (button.dataset.tab === 'config') loadConfig();
       if (button.dataset.tab === 'llm') loadLlmStatus();
     });
@@ -54,7 +55,9 @@ async function createJob(payload) {
   });
   const job = await response.json();
   state.currentJobId = job.id;
-  renderLatestJob(job);
+  renderLatestActivity(job);
+  renderRunProgress(job);
+  await loadActivity();
   startPolling(job.id);
   return job;
 }
@@ -115,43 +118,71 @@ function startPolling(jobId) {
   state.pollTimer = setInterval(async () => {
     try {
       const job = await (await api(`/api/jobs/${jobId}`)).json();
-      renderLatestJob(job);
-      renderJobPageStatus(job);
-      if (job.status === 'completed' || job.status === 'failed') {
+      renderLatestActivity(job);
+      renderRunProgress(job);
+      renderActivityPageStatus(job);
+      if (isTerminalStatus(job.status)) {
         clearInterval(state.pollTimer);
         state.pollTimer = null;
         await loadRuns();
-        await loadJobs();
+        await loadActivity();
         if (job.command === 'chart' && job.status === 'completed') showChartFromJob(job);
         if (job.command === 'news' && job.status === 'completed') showNewsFromJob(job);
       }
     } catch (error) {
-      renderLatestJob({ status: 'failed', command: 'unknown', error: error.message });
+      renderLatestActivity({ status: 'failed', command: 'unknown', error: error.message });
+      renderRunProgress({ status: 'failed', command: 'unknown', error: error.message });
       clearInterval(state.pollTimer);
     }
   }, 1500);
 }
 
-function renderLatestJob(job) {
+function renderLatestActivity(job) {
+  if (!$('latestActivity')) return;
   const output = job.output_dir ? `<div>Output: <code>${job.run_kind}/${job.output_dir}</code></div>` : '';
   const error = job.error ? `<div class="danger">${escapeHtml(job.error)}</div>` : '';
-  $('latestJob').className = 'job-card';
-  $('latestJob').innerHTML = `
-    <div><span class="badge ${job.status}">${job.status}</span> <strong>${job.command}</strong></div>
+  $('latestActivity').className = 'job-card';
+  $('latestActivity').innerHTML = `
+    <div><span class="badge ${job.status}">${job.status}</span> <strong>${escapeHtml(job.title || job.command)}</strong></div>
     <div class="hint">${job.started_at || job.created_at || ''}${job.finished_at ? ` → ${job.finished_at}` : ''}</div>
     ${output}${error}
     ${job.logs ? `<pre class="job-log">${escapeHtml(job.logs.slice(-5000))}</pre>` : ''}
   `;
 }
 
-function renderJobPageStatus(job) {
+function renderRunProgress(job) {
+  if (!$('runProgress') || !['scan', 'backtest'].includes(job.command)) return;
+  const output = job.output_dir ? `<div>Output: <code>${job.run_kind}/${job.output_dir}</code></div>` : '';
+  const error = job.error ? `<div class="danger">${escapeHtml(job.error)}</div>` : '';
+  $('runProgress').className = 'job-card';
+  $('runProgress').innerHTML = `
+    <div><span class="badge ${job.status}">${job.status}</span> <strong>${escapeHtml(job.command)}</strong></div>
+    <div class="hint">${job.started_at || job.created_at || ''}${job.finished_at ? ` → ${job.finished_at}` : ''}</div>
+    ${output}${error}
+    ${job.logs ? `<pre class="job-log">${escapeHtml(job.logs.slice(-5000))}</pre>` : ''}
+  `;
+}
+
+async function loadRunProgress() {
+  if (!$('runProgress')) return;
+  const jobs = await (await api('/api/jobs')).json();
+  const job = jobs.find((item) => ['scan', 'backtest'].includes(item.command));
+  if (!job) {
+    $('runProgress').className = 'job-card muted';
+    $('runProgress').textContent = 'No scan or backtest started yet.';
+    return;
+  }
+  renderRunProgress(job);
+}
+
+function renderActivityPageStatus(job) {
   if (job.command !== 'news') return;
   const status = $('newsStatus');
   if (!status) return;
   const output = job.output_dir ? ` Output: ${job.run_kind}/${job.output_dir}.` : '';
   const error = job.error ? ` Error: ${job.error}.` : '';
   status.textContent = `News summary job ${job.status}.${output}${error}`;
-  if (job.status === 'completed' || job.status === 'failed') {
+  if (isTerminalStatus(job.status)) {
     const button = $('runNews');
     if (button) {
       button.disabled = false;
@@ -160,21 +191,60 @@ function renderJobPageStatus(job) {
   }
 }
 
-async function loadJobs() {
-  const jobs = await (await api('/api/jobs')).json();
-  const box = $('jobsList');
-  if (!jobs.length) {
-    box.innerHTML = '<div class="panel muted">No jobs yet.</div>';
+async function loadActivity() {
+  const items = await (await api('/api/activity')).json();
+  const box = $('activityList');
+  if (items.length) renderLatestActivity(items[0]);
+  if (!items.length) {
+    box.innerHTML = '<div class="panel muted">No activity yet.</div>';
     return;
   }
-  box.innerHTML = jobs.map((job) => `
+  box.innerHTML = items.map((job) => `
     <section class="panel">
-      <div><span class="badge ${job.status}">${job.status}</span> <strong>${job.command}</strong> <code>${job.id.slice(0, 8)}</code></div>
+      <div class="activity-head">
+        <div><span class="badge ${job.status}">${job.status}</span> <strong>${escapeHtml(job.title || job.command)}</strong> <code>${job.id.slice(0, 8)}</code></div>
+        ${job.cancellable ? `<button class="danger-button small" data-cancel-url="${job.cancel_url}">Cancel</button>` : ''}
+      </div>
+      ${job.subtitle ? `<p class="hint">${escapeHtml(job.subtitle)}</p>` : ''}
       <p>${job.started_at || job.created_at || ''}${job.finished_at ? ` → ${job.finished_at}` : ''}</p>
       ${job.output_dir ? `<p>Output: <code>${job.run_kind}/${job.output_dir}</code></p>` : ''}
       ${job.error ? `<p class="danger">${escapeHtml(job.error)}</p>` : ''}
       ${job.logs ? `<pre class="job-log">${escapeHtml(job.logs.slice(-8000))}</pre>` : ''}
     </section>`).join('');
+  box.querySelectorAll('[data-cancel-url]').forEach((button) => {
+    button.addEventListener('click', () => cancelActivity(button.dataset.cancelUrl));
+  });
+}
+
+function startActivityPolling() {
+  if (state.activityPollTimer) clearInterval(state.activityPollTimer);
+  state.activityPollTimer = setInterval(async () => {
+    try {
+      await loadActivity();
+    } catch (_) {
+      // Keep the UI quiet during transient server restarts.
+    }
+  }, 5000);
+}
+
+function isTerminalStatus(status) {
+  return ['completed', 'failed', 'cancelled'].includes(status);
+}
+
+function formatEventsAsLog(events) {
+  return events.map((event) => `${event.created_at || ''} [${event.kind || 'event'}] ${event.message || ''}`).join('\n');
+}
+
+async function cancelActivity(cancelUrl) {
+  if (!cancelUrl) return;
+  try {
+    const item = await (await api(cancelUrl, { method: 'POST' })).json();
+    renderLatestActivity(item);
+    await loadActivity();
+    if (item.command === 'news') renderActivityPageStatus(item);
+  } catch (error) {
+    renderLatestActivity({ status: 'failed', command: 'cancel', error: `Cancel failed: ${error.message}` });
+  }
 }
 
 async function loadRuns() {
@@ -196,7 +266,10 @@ function renderRunList(containerId, kind, runs) {
   }
   container.innerHTML = runs.slice(0, 20).map((run) => `
     <div class="run-item">
-      <h4>${escapeHtml(formatRunTitle(run.id))}</h4>
+      <div class="run-title-row">
+        <h4>${escapeHtml(formatRunTitle(run.id))}</h4>
+        <button class="trash-button" data-delete-kind="${kind}" data-delete-run="${run.id}" title="Delete this run">&#128465;</button>
+      </div>
       <div class="run-meta">${escapeHtml(formatRunSubtitle(run.id))}</div>
       <div class="file-row">
         ${run.files.map((file) => `<button class="file-pill" data-kind="${kind}" data-run="${run.id}" data-file="${file}">${file}</button>`).join('')}
@@ -206,6 +279,35 @@ function renderRunList(containerId, kind, runs) {
   container.querySelectorAll('.file-pill').forEach((button) => {
     button.addEventListener('click', () => previewFile(button.dataset.kind, button.dataset.run, button.dataset.file));
   });
+  container.querySelectorAll('[data-delete-run]').forEach((button) => {
+    button.addEventListener('click', () => deleteRun(button.dataset.deleteKind, button.dataset.deleteRun));
+  });
+}
+
+async function deleteRun(kind, runId) {
+  if (!kind || !runId) return;
+  if (!confirm(`Delete ${kind}/${runId}? This cannot be undone.`)) return;
+  await api(`/api/runs/${kind}/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+  clearPreviewIfShowing(kind, runId);
+  await loadRuns();
+}
+
+async function deleteRunsForKind(kind) {
+  if (!kind) return;
+  if (!confirm(`Delete all ${kind} runs? This cannot be undone.`)) return;
+  await api(`/api/runs/${kind}`, { method: 'DELETE' });
+  clearPreviewIfShowing(kind, '');
+  await loadRuns();
+}
+
+function clearPreviewIfShowing(kind, runId) {
+  const link = $('downloadLink');
+  const href = link ? link.getAttribute('href') || '' : '';
+  if (!href.includes(`/api/files/${kind}/`)) return;
+  if (runId && !href.includes(`/api/files/${kind}/${runId}/`)) return;
+  $('fileViewer').className = 'viewer empty';
+  $('fileViewer').textContent = 'Select an output file.';
+  link.href = '#';
 }
 
 function formatRunTitle(runId) {
@@ -307,34 +409,34 @@ async function showNewsFromJob(job) {
   `;
 }
 
-async function startAgentFromUi() {
-  const ticker = $('agentTicker').value.trim();
-  const query = $('agentQuery').value.trim();
+async function startAgentFromQuestion(question) {
+  const query = question.trim();
   const status = $('agentStatus');
-  if (!ticker && !query) {
-    status.textContent = 'Enter a ticker or a research question.';
+  if (!query) {
+    status.textContent = 'Type a market question first.';
     return;
   }
-  $('runAgent').disabled = true;
-  $('runAgent').textContent = 'Agent Running...';
+  $('askAgent').disabled = true;
+  $('askAgent').textContent = 'Researching...';
   status.textContent = 'Starting agent session...';
   $('agentConversation').className = 'agent-conversation';
-  $('agentConversation').innerHTML = '';
-  $('agentReport').className = 'panel preview empty';
-  $('agentReport').textContent = 'Agent is researching...';
+  $('agentConversation').innerHTML = chatMessageBubble({ role: 'user', content: query, created_at: new Date().toISOString() });
   try {
     const session = await (await api('/api/agent/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker, query }),
+      body: JSON.stringify({ ticker: '', query }),
     })).json();
+    $('agentQuestion').value = '';
     state.agentSessionId = session.id;
     renderAgentSession(session);
+    renderLatestActivity({ ...session, command: 'agent', title: session.ticker ? `agent ${session.ticker}` : 'agent research', run_kind: 'agents' });
+    await loadActivity();
     startAgentPolling(session.id);
   } catch (error) {
     status.textContent = `Could not start agent: ${error.message}`;
-    $('runAgent').disabled = false;
-    $('runAgent').textContent = 'Run Agent';
+    $('askAgent').disabled = false;
+    $('askAgent').textContent = 'Ask';
   }
 }
 
@@ -344,10 +446,12 @@ function startAgentPolling(sessionId) {
     try {
       const session = await (await api(`/api/agent/sessions/${sessionId}`)).json();
       renderAgentSession(session);
-      if (session.status === 'completed' || session.status === 'failed') {
+      renderLatestActivity({ ...session, command: 'agent', title: session.ticker ? `agent ${session.ticker}` : 'agent research', run_kind: 'agents', logs: formatEventsAsLog(session.events || []) });
+      if (isTerminalStatus(session.status)) {
         clearInterval(state.agentPollTimer);
         state.agentPollTimer = null;
         await loadRuns();
+        await loadActivity();
       }
     } catch (error) {
       $('agentStatus').textContent = `Agent polling failed: ${error.message}`;
@@ -362,24 +466,19 @@ function renderAgentSession(session) {
   const out = session.output_dir ? ` Output: agents/${session.output_dir}.` : '';
   const err = session.error ? ` Error: ${session.error}.` : '';
   $('agentStatus').textContent = `Agent ${session.status}.${out}${err}`;
-  renderAgentConversation(session.events || [], session.messages || [], session.status);
-  if (session.report) {
-    $('agentReport').className = 'panel preview';
-    const sourceLink = session.output_dir ? `<a class="download" href="/api/files/agents/${session.output_dir}/agent_sources.csv" target="_blank">Open sources</a>` : '';
-    const reportLink = session.output_dir ? `<a class="download" href="/api/files/agents/${session.output_dir}/agent_report.md" target="_blank">Open agent report</a>` : '';
-    $('agentReport').innerHTML = `<div class="panel-title-row">${reportLink}${sourceLink}</div>${renderMarkdown(session.report)}`;
-  }
-  if (session.status === 'completed' || session.status === 'failed') {
-    $('runAgent').disabled = false;
-    $('runAgent').textContent = 'Run Agent';
+  renderAgentConversation(session);
+  if (isTerminalStatus(session.status)) {
+    if (session.status !== 'completed') state.agentSessionId = null;
+    $('askAgent').disabled = false;
+    $('askAgent').textContent = 'Ask';
   }
 }
 
-function renderAgentConversation(events, messages, status) {
-  renderConversation('agentConversation', events, messages, status, 'Research session', 'Agent finished. Ask a follow-up below.');
+function renderAgentConversation(session) {
+  renderConversation('agentConversation', session.events || [], session.messages || [], session.status, 'Research session', 'Agent finished. Ask a follow-up below.', agentReportBubble(session));
 }
 
-function renderConversation(containerId, events, messages, status, title, completedText = 'Finished.') {
+function renderConversation(containerId, events, messages, status, title, completedText = 'Finished.', finalBubble = '') {
   const box = $(containerId);
   if (!events.length && !messages.length) {
     box.className = 'agent-conversation empty';
@@ -388,15 +487,44 @@ function renderConversation(containerId, events, messages, status, title, comple
   }
   box.className = 'agent-conversation';
   const parts = [`<div class="chat-day">${escapeHtml(title)}</div>`];
-  parts.push(...events.map((event) => agentEventBubble(event)));
   if (messages.length) {
+    parts.push(chatMessageBubble(messages[0]));
+  }
+  parts.push(...events.map((event) => agentEventBubble(event)));
+  if (finalBubble) parts.push(finalBubble);
+  if (messages.length > 1) {
     parts.push('<div class="chat-day">Follow-up</div>');
-    parts.push(...messages.map((message) => chatMessageBubble(message)));
-  } else if (status === 'completed') {
-    parts.push(`<div class="chat-day">${escapeHtml(completedText)}</div>`);
+    parts.push(...messages.slice(1).map((message) => chatMessageBubble(message)));
+  }
+  if (!messages.length && isTerminalStatus(status)) {
+    const text = status === 'completed' ? completedText : `${title} ${status}.`;
+    parts.push(`<div class="chat-day">${escapeHtml(text)}</div>`);
   }
   box.innerHTML = parts.join('');
   box.scrollTop = box.scrollHeight;
+}
+
+function agentReportBubble(session) {
+  if (!session.report || !session.output_dir) return '';
+  const reportUrl = `/api/files/agents/${session.output_dir}/agent_report.md`;
+  const sourcesUrl = `/api/files/agents/${session.output_dir}/agent_sources.csv`;
+  const logUrl = `/api/files/agents/${session.output_dir}/agent_log.md`;
+  return `
+    <div class="chat-row incoming">
+      <div class="agent-bubble report">
+        <div class="bubble-name">Agent</div>
+        <div class="bubble-text">
+          ${renderMarkdown(session.report)}
+          <div class="bubble-links">
+            <a href="${reportUrl}" target="_blank">Open agent report</a>
+            <a href="${sourcesUrl}" target="_blank">Open sources</a>
+            <a href="${logUrl}" target="_blank">Open log</a>
+          </div>
+        </div>
+        <div class="bubble-time">${escapeHtml(formatEventTime(session.finished_at))}</div>
+      </div>
+    </div>
+  `;
 }
 
 function agentEventBubble(event) {
@@ -404,7 +532,7 @@ function agentEventBubble(event) {
   const message = String(event.message || '');
   const expanded = expandableText(message, 220);
   return `
-    <div class="chat-row ${agentBubbleSide(kind)}">
+    <div class="chat-row incoming">
       <div class="agent-bubble ${escapeHtml(kind)}">
         <div class="bubble-name">${escapeHtml(agentEventLabel(kind))}</div>
         <div class="bubble-text">${expanded}</div>
@@ -431,10 +559,6 @@ function agentEventLabel(kind) {
   return 'Agent';
 }
 
-function agentBubbleSide(kind) {
-  return kind === 'action' ? 'outgoing' : 'incoming';
-}
-
 function formatEventTime(value) {
   if (!value) return '';
   const date = new Date(value);
@@ -457,13 +581,42 @@ function chatMessageBubble(message) {
   `;
 }
 
+function appendChatMessage(containerId, message) {
+  const box = $(containerId);
+  if (!box) return;
+  if (box.classList.contains('empty')) {
+    box.className = 'agent-conversation';
+    box.innerHTML = '<div class="chat-day">Research session</div>';
+  }
+  box.insertAdjacentHTML('beforeend', chatMessageBubble(message));
+  box.scrollTop = box.scrollHeight;
+}
+
+function resetAgentConversation() {
+  state.agentSessionId = null;
+  if (state.agentPollTimer) {
+    clearInterval(state.agentPollTimer);
+    state.agentPollTimer = null;
+  }
+  $('agentSessionBadge').className = 'badge queued';
+  $('agentSessionBadge').textContent = 'idle';
+  $('agentConversation').className = 'agent-conversation empty';
+  $('agentConversation').innerHTML = '<div class="chat-day">No Research session started yet.</div>';
+  $('agentQuestion').value = '';
+  $('askAgent').disabled = false;
+  $('askAgent').textContent = 'Ask';
+  $('agentStatus').textContent = '';
+}
+
 async function askAgentQuestion() {
   const question = $('agentQuestion').value.trim();
   if (!question) return;
   if (!state.agentSessionId) {
-    $('agentStatus').textContent = 'Run the agent first, then ask follow-up questions.';
+    await startAgentFromQuestion(question);
     return;
   }
+  $('agentQuestion').value = '';
+  appendChatMessage('agentConversation', { role: 'user', content: question, created_at: new Date().toISOString() });
   $('askAgent').disabled = true;
   $('agentStatus').textContent = 'Asking follow-up question...';
   try {
@@ -472,12 +625,13 @@ async function askAgentQuestion() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question }),
     })).json();
-    $('agentQuestion').value = '';
     renderAgentSession(session);
   } catch (error) {
     $('agentStatus').textContent = `Follow-up failed: ${error.message}`;
+    appendChatMessage('agentConversation', { role: 'assistant', content: `Follow-up failed: ${error.message}`, created_at: new Date().toISOString() });
   } finally {
     $('askAgent').disabled = false;
+    $('askAgent').textContent = 'Ask';
   }
 }
 
@@ -493,6 +647,8 @@ async function startOracleFromUi() {
     const session = await (await api('/api/oracle/sessions', { method: 'POST' })).json();
     state.oracleSessionId = session.id;
     renderOracleSession(session);
+    renderLatestActivity({ ...session, command: 'oracle', title: 'oracle', run_kind: 'oracle' });
+    await loadActivity();
     startOraclePolling(session.id);
   } catch (error) {
     $('oracleStatus').textContent = `Could not start Oracle: ${error.message}`;
@@ -507,10 +663,12 @@ function startOraclePolling(sessionId) {
     try {
       const session = await (await api(`/api/oracle/sessions/${sessionId}`)).json();
       renderOracleSession(session);
-      if (session.status === 'completed' || session.status === 'failed') {
+      renderLatestActivity({ ...session, command: 'oracle', title: 'oracle', run_kind: 'oracle', logs: formatEventsAsLog(session.events || []) });
+      if (isTerminalStatus(session.status)) {
         clearInterval(state.oraclePollTimer);
         state.oraclePollTimer = null;
         await loadRuns();
+        await loadActivity();
       }
     } catch (error) {
       $('oracleStatus').textContent = `Oracle polling failed: ${error.message}`;
@@ -534,7 +692,7 @@ function renderOracleSession(session) {
     const logLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_log.md" target="_blank">Open log</a>` : '';
     $('oracleReport').innerHTML = `<div class="panel-title-row">${reportLink}${sourceLink}${pulseLink}${logLink}</div>${renderMarkdown(session.report)}`;
   }
-  if (session.status === 'completed' || session.status === 'failed') {
+  if (isTerminalStatus(session.status)) {
     $('runOracle').disabled = false;
     $('runOracle').textContent = 'Run Oracle';
   }
@@ -681,8 +839,8 @@ async function shutdownServer() {
 
 function wireActions() {
   wireNewsAction();
-  $('runAgent').addEventListener('click', startAgentFromUi);
   $('runOracle').addEventListener('click', startOracleFromUi);
+  $('resetAgent').addEventListener('click', resetAgentConversation);
   $('askAgent').addEventListener('click', askAgentQuestion);
   $('agentQuestion').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') askAgentQuestion();
@@ -703,9 +861,12 @@ function wireActions() {
     no_rsi: $('hideRsi').checked,
     no_macd: $('hideMacd').checked,
   }));
+  $('refreshRunProgress').addEventListener('click', loadRunProgress);
   $('refreshRuns').addEventListener('click', loadRuns);
-  $('refreshJobs').addEventListener('click', loadJobs);
-  $('refreshJobsPage').addEventListener('click', loadJobs);
+  document.querySelectorAll('[data-delete-kind]:not([data-delete-run])').forEach((button) => {
+    button.addEventListener('click', () => deleteRunsForKind(button.dataset.deleteKind));
+  });
+  $('refreshActivityPage').addEventListener('click', loadActivity);
   $('refreshLlm').addEventListener('click', loadLlmStatus);
   $('startLlm').addEventListener('click', startLlm);
   $('stopLlm').addEventListener('click', stopLlm);
@@ -907,6 +1068,8 @@ function escapeHtml(value) {
 initTabs();
 wireActions();
 loadRuns();
-loadJobs();
+loadActivity();
+loadRunProgress();
 loadConfig();
 loadLlmStatus();
+startActivityPolling();

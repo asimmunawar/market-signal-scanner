@@ -27,7 +27,7 @@
         <button class="nav-button" data-tab="llm">LLM</button>
         <button class="nav-button" data-tab="outputs">Outputs</button>
         <button class="nav-button" data-tab="config">Config</button>
-        <button class="nav-button" data-tab="jobs">Jobs</button>
+        <button class="nav-button" data-tab="activity">Activity</button>
       </nav>
       <div class="server-controls">
         <button id="shutdownServer" class="danger-button">Shutdown Server</button>
@@ -59,10 +59,10 @@
         </div>
         <section class="panel live-panel">
           <div class="panel-title-row">
-            <h3>Latest Job</h3>
-            <button id="refreshJobs" class="ghost">Refresh</button>
+            <h3>Scan / Backtest Progress</h3>
+            <button id="refreshRunProgress" class="ghost">Refresh</button>
           </div>
-          <div id="latestJob" class="job-card muted">No job started yet.</div>
+          <div id="runProgress" class="job-card muted">No scan or backtest started yet.</div>
         </section>
       </section>
 
@@ -115,36 +115,30 @@
       <section id="tab-agent" class="tab">
         <div class="page-head">
           <div>
-            <h2>Agent</h2>
-            <p>Run deeper ReAct-style market research with live search progress and follow-up questions.</p>
+            <h2>Market Agent</h2>
+            <p>Ask anything about markets, stocks, crypto, macro, sectors, risks, catalysts, valuation, or timing.</p>
           </div>
         </div>
-        <section class="panel">
-          <div class="form-grid agent-form">
-            <label>Ticker<input id="agentTicker" value="AAPL" /></label>
-            <label class="wide">Question<input id="agentQuery" value="What is the latest market perception and buy/sell case?" /></label>
-          </div>
-          <button id="runAgent" class="primary" type="button">Run Agent</button>
-          <div id="agentStatus" class="status-line"></div>
-          <p class="hint">Writes to <code>output/agents/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. Agent prompts live in <code>config/prompts/</code>.</p>
-        </section>
         <section class="panel agent-phone-panel">
           <div class="agent-phone">
             <div class="agent-phone-head">
               <div>
-                <h3>Agent Chat</h3>
-                <p>Live research progress and follow-up questions</p>
+                <h3>Market Agent</h3>
+                <p>Type a market question to start research</p>
               </div>
-              <span id="agentSessionBadge" class="badge queued">idle</span>
+              <div class="agent-head-actions">
+                <button id="resetAgent" class="ghost small" type="button">Reset</button>
+                <span id="agentSessionBadge" class="badge queued">idle</span>
+              </div>
             </div>
             <div id="agentConversation" class="agent-conversation empty">No agent run started yet.</div>
             <div class="agent-chat-form">
-              <input id="agentQuestion" placeholder="Ask about risks, catalysts, valuation, or timing..." />
+              <input id="agentQuestion" type="text" name="market-agent-question" autocomplete="off" autocapitalize="sentences" spellcheck="true" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" placeholder="Ask anything about markets, a stock, crypto, rates, sectors..." />
               <button id="askAgent" class="ghost" type="button">Ask</button>
             </div>
           </div>
         </section>
-        <section id="agentReport" class="panel preview empty">No agent report generated in this session yet.</section>
+        <div id="agentStatus" class="status-line"></div>
       </section>
 
       <section id="tab-oracle" class="tab">
@@ -213,12 +207,12 @@
           <button id="refreshRuns" class="ghost">Refresh</button>
         </div>
         <div class="grid outputs-grid">
-          <section class="panel"><h3>Scans</h3><div id="scanRuns" class="run-list"></div></section>
-          <section class="panel"><h3>Backtests</h3><div id="backtestRuns" class="run-list"></div></section>
-          <section class="panel"><h3>Charts</h3><div id="chartRuns" class="run-list"></div></section>
-          <section class="panel"><h3>News</h3><div id="newsRuns" class="run-list"></div></section>
-          <section class="panel"><h3>Agents</h3><div id="agentRuns" class="run-list"></div></section>
-          <section class="panel"><h3>Oracle</h3><div id="oracleRuns" class="run-list"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>Scans</h3><button class="trash-button" data-delete-kind="scans" title="Delete all scan runs">&#128465;</button></div><div id="scanRuns" class="run-list"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>Backtests</h3><button class="trash-button" data-delete-kind="backtests" title="Delete all backtest runs">&#128465;</button></div><div id="backtestRuns" class="run-list"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>Charts</h3><button class="trash-button" data-delete-kind="charts" title="Delete all chart runs">&#128465;</button></div><div id="chartRuns" class="run-list"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>News</h3><button class="trash-button" data-delete-kind="news" title="Delete all news runs">&#128465;</button></div><div id="newsRuns" class="run-list"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>Agents</h3><button class="trash-button" data-delete-kind="agents" title="Delete all agent runs">&#128465;</button></div><div id="agentRuns" class="run-list"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>Oracle</h3><button class="trash-button" data-delete-kind="oracle" title="Delete all Oracle runs">&#128465;</button></div><div id="oracleRuns" class="run-list"></div></section>
         </div>
         <section class="panel viewer-panel">
           <div class="panel-title-row"><h3>Preview</h3><a id="downloadLink" class="download" href="#" target="_blank">Open file</a></div>
@@ -238,19 +232,19 @@
         <div id="configStatus" class="status-line"></div>
       </section>
 
-      <section id="tab-jobs" class="tab">
+      <section id="tab-activity" class="tab">
         <div class="page-head">
           <div>
-            <h2>Jobs</h2>
-            <p>Recent server-side commands and logs.</p>
+            <h2>Activity</h2>
+            <p>Running and recent scans, charts, backtests, news summaries, Agent sessions, and Oracle sessions.</p>
           </div>
-          <button id="refreshJobsPage" class="ghost">Refresh</button>
+          <button id="refreshActivityPage" class="ghost">Refresh</button>
         </div>
-        <div id="jobsList" class="jobs-list"></div>
+        <div id="activityList" class="jobs-list"></div>
       </section>
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260426-agent"></script>
+  <script src="/static/app.js?v=20260427-agent-input-cleanup"></script>
 </body>
 </html>

@@ -417,17 +417,23 @@ def call_ollama(agent_config: AgentConfig, prompt: str) -> str:
         "stream": False,
         "options": {"temperature": agent_config.temperature},
     }
-    response = requests.post(
-        f"{agent_config.base_url}/api/generate",
-        json=payload,
-        timeout=agent_config.timeout_seconds,
-    )
-    response.raise_for_status()
-    data = response.json()
-    text = str(data.get("response") or "").strip()
-    if not text:
-        raise RuntimeError("Ollama returned an empty response")
-    return text
+    last_empty = False
+    for attempt in range(2):
+        response = requests.post(
+            f"{agent_config.base_url}/api/generate",
+            json=payload,
+            timeout=agent_config.timeout_seconds,
+        )
+        response.raise_for_status()
+        data = response.json()
+        text = str(data.get("response") or "").strip()
+        if text:
+            return text
+        last_empty = True
+        time.sleep(0.8 + attempt)
+    if last_empty:
+        raise RuntimeError("Ollama returned an empty response after retry")
+    raise RuntimeError("Ollama returned an empty response")
 
 
 def call_logged_ollama(agent_config: Any, prompt: str, state: dict[str, Any], call_name: str) -> str:
