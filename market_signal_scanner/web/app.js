@@ -1,6 +1,10 @@
 const state = {
   currentJobId: null,
   pollTimer: null,
+  agentSessionId: null,
+  agentPollTimer: null,
+  oracleSessionId: null,
+  oraclePollTimer: null,
   runs: null,
 };
 
@@ -180,6 +184,8 @@ async function loadRuns() {
   renderRunList('backtestRuns', 'backtests', runs.backtests);
   renderRunList('chartRuns', 'charts', runs.charts);
   renderRunList('newsRuns', 'news', runs.news || []);
+  renderRunList('agentRuns', 'agents', runs.agents || []);
+  renderRunList('oracleRuns', 'oracle', runs.oracle || []);
 }
 
 function renderRunList(containerId, kind, runs) {
@@ -301,6 +307,239 @@ async function showNewsFromJob(job) {
   `;
 }
 
+async function startAgentFromUi() {
+  const ticker = $('agentTicker').value.trim();
+  const query = $('agentQuery').value.trim();
+  const status = $('agentStatus');
+  if (!ticker && !query) {
+    status.textContent = 'Enter a ticker or a research question.';
+    return;
+  }
+  $('runAgent').disabled = true;
+  $('runAgent').textContent = 'Agent Running...';
+  status.textContent = 'Starting agent session...';
+  $('agentConversation').className = 'agent-conversation';
+  $('agentConversation').innerHTML = '';
+  $('agentReport').className = 'panel preview empty';
+  $('agentReport').textContent = 'Agent is researching...';
+  try {
+    const session = await (await api('/api/agent/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, query }),
+    })).json();
+    state.agentSessionId = session.id;
+    renderAgentSession(session);
+    startAgentPolling(session.id);
+  } catch (error) {
+    status.textContent = `Could not start agent: ${error.message}`;
+    $('runAgent').disabled = false;
+    $('runAgent').textContent = 'Run Agent';
+  }
+}
+
+function startAgentPolling(sessionId) {
+  if (state.agentPollTimer) clearInterval(state.agentPollTimer);
+  state.agentPollTimer = setInterval(async () => {
+    try {
+      const session = await (await api(`/api/agent/sessions/${sessionId}`)).json();
+      renderAgentSession(session);
+      if (session.status === 'completed' || session.status === 'failed') {
+        clearInterval(state.agentPollTimer);
+        state.agentPollTimer = null;
+        await loadRuns();
+      }
+    } catch (error) {
+      $('agentStatus').textContent = `Agent polling failed: ${error.message}`;
+      clearInterval(state.agentPollTimer);
+    }
+  }, 1500);
+}
+
+function renderAgentSession(session) {
+  $('agentSessionBadge').className = `badge ${session.status}`;
+  $('agentSessionBadge').textContent = session.status;
+  const out = session.output_dir ? ` Output: agents/${session.output_dir}.` : '';
+  const err = session.error ? ` Error: ${session.error}.` : '';
+  $('agentStatus').textContent = `Agent ${session.status}.${out}${err}`;
+  renderAgentConversation(session.events || [], session.messages || [], session.status);
+  if (session.report) {
+    $('agentReport').className = 'panel preview';
+    const sourceLink = session.output_dir ? `<a class="download" href="/api/files/agents/${session.output_dir}/agent_sources.csv" target="_blank">Open sources</a>` : '';
+    const reportLink = session.output_dir ? `<a class="download" href="/api/files/agents/${session.output_dir}/agent_report.md" target="_blank">Open agent report</a>` : '';
+    $('agentReport').innerHTML = `<div class="panel-title-row">${reportLink}${sourceLink}</div>${renderMarkdown(session.report)}`;
+  }
+  if (session.status === 'completed' || session.status === 'failed') {
+    $('runAgent').disabled = false;
+    $('runAgent').textContent = 'Run Agent';
+  }
+}
+
+function renderAgentConversation(events, messages, status) {
+  renderConversation('agentConversation', events, messages, status, 'Research session', 'Agent finished. Ask a follow-up below.');
+}
+
+function renderConversation(containerId, events, messages, status, title, completedText = 'Finished.') {
+  const box = $(containerId);
+  if (!events.length && !messages.length) {
+    box.className = 'agent-conversation empty';
+    box.innerHTML = `<div class="chat-day">No ${escapeHtml(title)} started yet.</div>`;
+    return;
+  }
+  box.className = 'agent-conversation';
+  const parts = [`<div class="chat-day">${escapeHtml(title)}</div>`];
+  parts.push(...events.map((event) => agentEventBubble(event)));
+  if (messages.length) {
+    parts.push('<div class="chat-day">Follow-up</div>');
+    parts.push(...messages.map((message) => chatMessageBubble(message)));
+  } else if (status === 'completed') {
+    parts.push(`<div class="chat-day">${escapeHtml(completedText)}</div>`);
+  }
+  box.innerHTML = parts.join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+function agentEventBubble(event) {
+  const kind = event.kind || 'thought';
+  const message = String(event.message || '');
+  const expanded = expandableText(message, 220);
+  return `
+    <div class="chat-row ${agentBubbleSide(kind)}">
+      <div class="agent-bubble ${escapeHtml(kind)}">
+        <div class="bubble-name">${escapeHtml(agentEventLabel(kind))}</div>
+        <div class="bubble-text">${expanded}</div>
+        <div class="bubble-time">${escapeHtml(formatEventTime(event.created_at))}</div>
+      </div>
+    </div>
+  `;
+}
+
+function expandableText(text, limit) {
+  if (text.length <= limit) return `<span>${escapeHtml(text)}</span>`;
+  const preview = text.slice(0, limit).trimEnd();
+  return `
+    <details>
+      <summary>${escapeHtml(preview)}... <span>show more</span></summary>
+      <div class="bubble-full">${escapeHtml(text)}</div>
+    </details>
+  `;
+}
+
+function agentEventLabel(kind) {
+  if (kind === 'action') return 'Research Agent';
+  if (kind === 'observation') return 'Sources';
+  return 'Agent';
+}
+
+function agentBubbleSide(kind) {
+  return kind === 'action' ? 'outgoing' : 'incoming';
+}
+
+function formatEventTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+function chatMessageBubble(message) {
+  const role = message.role || 'assistant';
+  const outgoing = role === 'user';
+  const content = role === 'assistant' ? renderMarkdown(message.content || '') : escapeHtml(message.content || '');
+  return `
+    <div class="chat-row ${outgoing ? 'outgoing' : 'incoming'}">
+      <div class="chat-message ${escapeHtml(role)}">
+        <div class="bubble-name">${outgoing ? 'You' : 'Agent'}</div>
+        <div class="bubble-text">${content}</div>
+        <div class="bubble-time">${escapeHtml(formatEventTime(message.created_at))}</div>
+      </div>
+    </div>
+  `;
+}
+
+async function askAgentQuestion() {
+  const question = $('agentQuestion').value.trim();
+  if (!question) return;
+  if (!state.agentSessionId) {
+    $('agentStatus').textContent = 'Run the agent first, then ask follow-up questions.';
+    return;
+  }
+  $('askAgent').disabled = true;
+  $('agentStatus').textContent = 'Asking follow-up question...';
+  try {
+    const session = await (await api(`/api/agent/sessions/${state.agentSessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    })).json();
+    $('agentQuestion').value = '';
+    renderAgentSession(session);
+  } catch (error) {
+    $('agentStatus').textContent = `Follow-up failed: ${error.message}`;
+  } finally {
+    $('askAgent').disabled = false;
+  }
+}
+
+async function startOracleFromUi() {
+  $('runOracle').disabled = true;
+  $('runOracle').textContent = 'Oracle Running...';
+  $('oracleStatus').textContent = 'Starting Oracle scan...';
+  $('oracleConversation').className = 'agent-conversation';
+  $('oracleConversation').innerHTML = '';
+  $('oracleReport').className = 'panel preview empty';
+  $('oracleReport').textContent = 'Oracle is scanning markets...';
+  try {
+    const session = await (await api('/api/oracle/sessions', { method: 'POST' })).json();
+    state.oracleSessionId = session.id;
+    renderOracleSession(session);
+    startOraclePolling(session.id);
+  } catch (error) {
+    $('oracleStatus').textContent = `Could not start Oracle: ${error.message}`;
+    $('runOracle').disabled = false;
+    $('runOracle').textContent = 'Run Oracle';
+  }
+}
+
+function startOraclePolling(sessionId) {
+  if (state.oraclePollTimer) clearInterval(state.oraclePollTimer);
+  state.oraclePollTimer = setInterval(async () => {
+    try {
+      const session = await (await api(`/api/oracle/sessions/${sessionId}`)).json();
+      renderOracleSession(session);
+      if (session.status === 'completed' || session.status === 'failed') {
+        clearInterval(state.oraclePollTimer);
+        state.oraclePollTimer = null;
+        await loadRuns();
+      }
+    } catch (error) {
+      $('oracleStatus').textContent = `Oracle polling failed: ${error.message}`;
+      clearInterval(state.oraclePollTimer);
+    }
+  }, 1500);
+}
+
+function renderOracleSession(session) {
+  $('oracleSessionBadge').className = `badge ${session.status}`;
+  $('oracleSessionBadge').textContent = session.status;
+  const out = session.output_dir ? ` Output: oracle/${session.output_dir}.` : '';
+  const err = session.error ? ` Error: ${session.error}.` : '';
+  $('oracleStatus').textContent = `Oracle ${session.status}.${out}${err}`;
+  renderConversation('oracleConversation', session.events || [], [], session.status, 'Oracle scan');
+  if (session.report) {
+    $('oracleReport').className = 'panel preview';
+    const reportLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_report.md" target="_blank">Open Oracle report</a>` : '';
+    const sourceLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_sources.csv" target="_blank">Open sources</a>` : '';
+    const pulseLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_market_pulse.csv" target="_blank">Open market pulse</a>` : '';
+    const logLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_log.md" target="_blank">Open log</a>` : '';
+    $('oracleReport').innerHTML = `<div class="panel-title-row">${reportLink}${sourceLink}${pulseLink}${logLink}</div>${renderMarkdown(session.report)}`;
+  }
+  if (session.status === 'completed' || session.status === 'failed') {
+    $('runOracle').disabled = false;
+    $('runOracle').textContent = 'Run Oracle';
+  }
+}
+
 async function loadConfig() {
   try {
     const text = await (await api('/api/config')).text();
@@ -318,7 +557,7 @@ async function saveConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: $('configEditor').value }),
     });
-    $('configStatus').textContent = 'Saved config.yaml.';
+    $('configStatus').textContent = 'Saved config/config.yaml.';
   } catch (error) {
     $('configStatus').textContent = `Save failed: ${error.message}`;
   }
@@ -399,7 +638,7 @@ function renderLlmHelp(status) {
     notes.push(`Install the configured model with: ollama pull ${status.model}`);
   }
   if (!notes.length) {
-    notes.push('The configured LLM is ready for News Summary.');
+    notes.push('The configured LLM is ready for News Summary and Agent research.');
   }
   $('llmHelp').innerHTML = notes.map((note) => `<div>${escapeHtml(note)}</div>`).join('');
 }
@@ -442,6 +681,12 @@ async function shutdownServer() {
 
 function wireActions() {
   wireNewsAction();
+  $('runAgent').addEventListener('click', startAgentFromUi);
+  $('runOracle').addEventListener('click', startOracleFromUi);
+  $('askAgent').addEventListener('click', askAgentQuestion);
+  $('agentQuestion').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') askAgentQuestion();
+  });
   $('runScan').addEventListener('click', () => createJob({ command: 'scan', skip_fundamentals: $('scanSkipFundamentals').checked }));
   $('runBacktest').addEventListener('click', () => createJob({ command: 'backtest' }));
   $('runChart').addEventListener('click', () => createJob({

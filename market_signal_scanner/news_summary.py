@@ -19,6 +19,7 @@ import yfinance as yf
 from market_signal_scanner.config_loader import NewsSummaryConfig, ScannerConfig
 from market_signal_scanner.data_fetcher import Cache, fetch_fundamentals, fetch_price_history, safe_name
 from market_signal_scanner.indicators import compute_signals
+from market_signal_scanner.prompt_loader import load_prompt
 from market_signal_scanner.scorer import score_universe
 
 
@@ -233,37 +234,13 @@ def build_prompt(state: NewsSummaryState) -> str:
         f"{index}. {source.title} | {source.publisher or 'unknown'} | {source.published or 'undated'} | {source.url}\n   {source.summary[:350]}"
         for index, source in enumerate(state.sources, start=1)
     ) or "No recent news sources were found."
-    return f"""You are a cautious financial news summarizer inside market-signal-scanner.
-
-Ticker: {state.ticker}
-Entity name: {state.entity_name or state.ticker}
-
-Technical/scoring signals:
-{json.dumps(signals, indent=2, default=str)}
-
-Fundamental snapshot:
-{json.dumps(fundamentals, indent=2, default=str)}
-
-Recent source list:
-{sources}
-
-Write a source-grounded research memo in Markdown with these sections:
-1. Verdict
-2. Buy Case
-3. Sell / Avoid Case
-4. Short-Term Outlook
-5. Long-Term Outlook
-6. Catalysts To Watch
-7. Key Risks
-8. Source Notes
-
-Rules:
-- Do not fabricate facts, numbers, news, ratings, or price targets.
-- Treat predictions as scenarios with uncertainty, not guarantees.
-- Mention if the available sources are thin, stale, or inconclusive.
-- Tie claims back to the provided technical signals, fundamentals, or news titles.
-- Include a final disclaimer that this is analytical research, not financial advice.
-"""
+    return load_prompt("news_summary.md").format(
+        ticker=state.ticker,
+        entity_name=state.entity_name or state.ticker,
+        signals_json=json.dumps(signals, indent=2, default=str),
+        fundamentals_json=json.dumps(fundamentals, indent=2, default=str),
+        sources_text=sources,
+    )
 
 
 def compact_signals(signals: dict[str, Any]) -> dict[str, Any]:

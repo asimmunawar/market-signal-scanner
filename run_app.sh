@@ -25,9 +25,9 @@ echo "Installing/updating dependencies..."
 "$PYTHON" -m pip install --upgrade pip
 "$PYTHON" -m pip install -r requirements.txt
 
-if [ ! -f "config.yaml" ] && [ -f "config.example.yaml" ]; then
-  echo "Creating config.yaml from config.example.yaml..."
-  cp config.example.yaml config.yaml
+if [ ! -f "config/config.yaml" ] && [ -f "config/config.example.yaml" ]; then
+  echo "Creating config/config.yaml from config/config.example.yaml..."
+  cp config/config.example.yaml config/config.yaml
 fi
 
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import signal
 import subprocess
@@ -20,11 +21,13 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from market_signal_scanner.agent_researcher import append_agent_log_event, answer_followup, run_agent_research, sync_agent_log_llm_calls
 from market_signal_scanner.config_loader import load_config
+from market_signal_scanner.oracle import append_oracle_log_event, run_oracle
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+CONFIG_PATH = PROJECT_ROOT / "config" / "config.yaml"
 OUTPUT_ROOT = PROJECT_ROOT / "output"
 WEB_ROOT = PROJECT_ROOT / "market_signal_scanner" / "web"
 CLI_SCRIPT = PROJECT_ROOT / "market-signal-scanner.py"
@@ -50,6 +53,15 @@ class JobRequest(BaseModel):
     no_macd: bool = False
 
 
+class AgentStartRequest(BaseModel):
+    ticker: Optional[str] = None
+    query: str = ""
+
+
+class AgentQuestionRequest(BaseModel):
+    question: str
+
+
 @dataclass
 class Job:
     id: str
@@ -67,6 +79,10 @@ class Job:
 app = FastAPI(title="market-signal-scanner GUI")
 jobs: dict[str, Job] = {}
 jobs_lock = threading.Lock()
+agent_sessions: dict[str, dict[str, Any]] = {}
+agent_lock = threading.Lock()
+oracle_sessions: dict[str, dict[str, Any]] = {}
+oracle_lock = threading.Lock()
 managed_ollama_process: Optional[subprocess.Popen[str]] = None
 llm_lock = threading.Lock()
 
@@ -164,7 +180,7 @@ def stop_process() -> None:
 @app.get("/api/config", response_class=PlainTextResponse)
 def get_config() -> str:
     if not CONFIG_PATH.exists():
-        raise HTTPException(status_code=404, detail="config.yaml not found")
+        raise HTTPException(status_code=404, detail="config/config.yaml not found")
     return CONFIG_PATH.read_text(encoding="utf-8")
 
 
@@ -181,7 +197,105 @@ def list_runs() -> dict[str, Any]:
         "backtests": runs_for("backtests"),
         "charts": runs_for("charts"),
         "news": runs_for("news"),
+        "agents": runs_for("agents"),
+        "oracle": runs_for("oracle"),
     }
+
+
+@app.post("/api/oracle/sessions")
+def create_oracle_session() -> dict[str, Any]:
+    session_id = str(uuid.uuid4())
+    session = {
+        "id": session_id,
+        "status": "queued",
+        "events": [],
+        "output_dir": None,
+        "report": "",
+        "sources": [],
+        "market_pulse": [],
+        "error": None,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "finished_at": None,
+    }
+    with oracle_lock:
+        oracle_sessions[session_id] = session
+    thread = threading.Thread(target=run_oracle_session, args=(session_id,), daemon=True)
+    thread.start()
+    return serialize_oracle_session(session)
+
+
+@app.get("/api/oracle/sessions/{session_id}")
+def get_oracle_session(session_id: str) -> dict[str, Any]:
+    with oracle_lock:
+        session = oracle_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Oracle session not found")
+    return serialize_oracle_session(session)
+
+
+@app.post("/api/agent/sessions")
+def create_agent_session(request: AgentStartRequest) -> dict[str, Any]:
+    if not request.query.strip() and not (request.ticker or "").strip():
+        raise HTTPException(status_code=400, detail="Enter a ticker or a research question")
+    session_id = str(uuid.uuid4())
+    session = {
+        "id": session_id,
+        "status": "queued",
+        "ticker": (request.ticker or "").strip().upper(),
+        "query": request.query.strip(),
+        "events": [],
+        "messages": [],
+        "output_dir": None,
+        "report": "",
+        "sources": [],
+        "error": None,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "finished_at": None,
+        "context_path": None,
+    }
+    with agent_lock:
+        agent_sessions[session_id] = session
+    thread = threading.Thread(target=run_agent_session, args=(session_id,), daemon=True)
+    thread.start()
+    return serialize_agent_session(session)
+
+
+@app.get("/api/agent/sessions/{session_id}")
+def get_agent_session(session_id: str) -> dict[str, Any]:
+    with agent_lock:
+        session = agent_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Agent session not found")
+    return serialize_agent_session(session)
+
+
+@app.post("/api/agent/sessions/{session_id}/messages")
+def ask_agent_question(session_id: str, request: AgentQuestionRequest) -> dict[str, Any]:
+    question = request.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required")
+    with agent_lock:
+        session = agent_sessions.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Agent session not found")
+        if session["status"] != "completed":
+            raise HTTPException(status_code=400, detail="Wait for the agent run to finish before asking follow-up questions")
+        session["messages"].append({"role": "user", "content": question, "created_at": datetime.now().isoformat(timespec="seconds")})
+        context_path = session.get("context_path")
+    if not context_path:
+        raise HTTPException(status_code=400, detail="Agent context is unavailable")
+    context = json_load(Path(context_path))
+    context["chat"] = session["messages"]
+    config = load_config(CONFIG_PATH)
+    answer = answer_followup(question, context, config)
+    with agent_lock:
+        session = agent_sessions[session_id]
+        session["messages"].append({"role": "assistant", "content": answer, "created_at": datetime.now().isoformat(timespec="seconds")})
+        if context_path:
+            context["chat"] = session["messages"]
+            Path(context_path).write_text(json_dump(context), encoding="utf-8")
+            sync_agent_log_llm_calls(Path(context_path).parent, context.get("llm_calls", []))
+    return serialize_agent_session(session)
 
 
 @app.get("/api/runs/{kind}/{run_id}")
@@ -297,6 +411,84 @@ def run_job(job_id: str, request: JobRequest) -> None:
             job.finished_at = datetime.now().isoformat(timespec="seconds")
 
 
+def run_agent_session(session_id: str) -> None:
+    with agent_lock:
+        session = agent_sessions[session_id]
+        session["status"] = "running"
+        session["events"].append({"kind": "thought", "message": "Starting ReAct financial research agent.", "created_at": datetime.now().isoformat(timespec="seconds")})
+
+    def progress(kind: str, message: str) -> None:
+        with agent_lock:
+            current = agent_sessions[session_id]
+            current["events"].append({"kind": kind, "message": message, "created_at": datetime.now().isoformat(timespec="seconds")})
+
+    try:
+        with agent_lock:
+            current = dict(agent_sessions[session_id])
+        config = load_config(CONFIG_PATH)
+        result = run_agent_research(
+            query=current.get("query", ""),
+            ticker=current.get("ticker", ""),
+            config=config,
+            output_base=OUTPUT_ROOT,
+            progress=progress,
+        )
+        context = json_load(result.context_path)
+        report = result.report_path.read_text(encoding="utf-8", errors="replace")
+        with agent_lock:
+            session = agent_sessions[session_id]
+            session["status"] = "completed"
+            session["output_dir"] = result.output_dir.name
+            session["report"] = report
+            session["sources"] = context.get("evidence", [])
+            session["context_path"] = str(result.context_path)
+            session["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            saved_event = {"kind": "observation", "message": f"Saved agent outputs to agents/{result.output_dir.name}.", "created_at": session["finished_at"]}
+            session["events"].append(saved_event)
+        append_agent_log_event(result.output_dir, saved_event)
+    except Exception as exc:
+        with agent_lock:
+            session = agent_sessions[session_id]
+            session["status"] = "failed"
+            session["error"] = str(exc)
+            session["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            session["events"].append({"kind": "observation", "message": f"Agent failed: {exc}", "created_at": session["finished_at"]})
+
+
+def run_oracle_session(session_id: str) -> None:
+    with oracle_lock:
+        session = oracle_sessions[session_id]
+        session["status"] = "running"
+        session["events"].append({"kind": "thought", "message": "Starting Oracle market disruption scan.", "created_at": datetime.now().isoformat(timespec="seconds")})
+
+    def progress(kind: str, message: str) -> None:
+        with oracle_lock:
+            current = oracle_sessions[session_id]
+            current["events"].append({"kind": kind, "message": message, "created_at": datetime.now().isoformat(timespec="seconds")})
+
+    try:
+        config = load_config(CONFIG_PATH)
+        result = run_oracle(config=config, output_base=OUTPUT_ROOT, progress=progress)
+        with oracle_lock:
+            session = oracle_sessions[session_id]
+            session["status"] = "completed"
+            session["output_dir"] = result.output_dir.name
+            session["report"] = result.report
+            session["sources"] = [item.__dict__ for item in result.sources]
+            session["market_pulse"] = result.market_pulse
+            session["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            saved_event = {"kind": "observation", "message": f"Saved Oracle outputs to oracle/{result.output_dir.name}.", "created_at": session["finished_at"]}
+            session["events"].append(saved_event)
+        append_oracle_log_event(result.output_dir, saved_event)
+    except Exception as exc:
+        with oracle_lock:
+            session = oracle_sessions[session_id]
+            session["status"] = "failed"
+            session["error"] = str(exc)
+            session["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            session["events"].append({"kind": "observation", "message": f"Oracle failed: {exc}", "created_at": session["finished_at"]})
+
+
 def build_cli_args(request: JobRequest) -> list[str]:
     args = [sys.executable, str(CLI_SCRIPT), request.command, "--config", str(CONFIG_PATH), "--output", str(OUTPUT_ROOT)]
     if request.command == "scan" and request.skip_fundamentals:
@@ -353,7 +545,7 @@ def newest_run(kind: str, preferred: Optional[list[str]] = None) -> Optional[Pat
 
 
 def safe_run_dir(kind: str, run_id: str) -> Path:
-    if kind not in {"scans", "backtests", "charts", "news"}:
+    if kind not in {"scans", "backtests", "charts", "news", "agents", "oracle"}:
         raise HTTPException(status_code=400, detail="Invalid run kind")
     root = (OUTPUT_ROOT / kind).resolve()
     run_dir = (root / run_id).resolve()
@@ -389,6 +581,48 @@ def serialize_job(job: Job) -> dict[str, Any]:
         "error": job.error,
         "run_kind": kind_for_command(job.command),
     }
+
+
+def serialize_agent_session(session: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": session["id"],
+        "status": session["status"],
+        "ticker": session.get("ticker", ""),
+        "query": session.get("query", ""),
+        "events": session.get("events", []),
+        "messages": session.get("messages", []),
+        "output_dir": session.get("output_dir"),
+        "run_kind": "agents",
+        "report": session.get("report", ""),
+        "sources": session.get("sources", []),
+        "market_pulse": session.get("market_pulse", []),
+        "error": session.get("error"),
+        "created_at": session.get("created_at"),
+        "finished_at": session.get("finished_at"),
+    }
+
+
+def serialize_oracle_session(session: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": session["id"],
+        "status": session["status"],
+        "events": session.get("events", []),
+        "output_dir": session.get("output_dir"),
+        "run_kind": "oracle",
+        "report": session.get("report", ""),
+        "sources": session.get("sources", []),
+        "error": session.get("error"),
+        "created_at": session.get("created_at"),
+        "finished_at": session.get("finished_at"),
+    }
+
+
+def json_load(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def json_dump(value: dict[str, Any]) -> str:
+    return json.dumps(value, indent=2, default=str)
 
 
 def get_llm_status() -> dict[str, Any]:

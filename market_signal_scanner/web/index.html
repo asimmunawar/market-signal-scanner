@@ -22,6 +22,8 @@
         <button class="nav-button active" data-tab="run">Run</button>
         <button class="nav-button" data-tab="chart">Chart</button>
         <button class="nav-button" data-tab="news">News Summary</button>
+        <button class="nav-button" data-tab="agent">Agent</button>
+        <button class="nav-button" data-tab="oracle">Oracle</button>
         <button class="nav-button" data-tab="llm">LLM</button>
         <button class="nav-button" data-tab="outputs">Outputs</button>
         <button class="nav-button" data-tab="config">Config</button>
@@ -50,7 +52,7 @@
           </section>
           <section class="panel">
             <h3>Backtest</h3>
-            <p class="compact">Uses the <code>backtest</code> section in <code>config.yaml</code>.</p>
+            <p class="compact">Uses the <code>backtest</code> section in <code>config/config.yaml</code>.</p>
             <button id="runBacktest" class="primary">Run Backtest</button>
             <p class="hint">Writes to <code>output/backtests/&lt;timestamp&gt;/</code>.</p>
           </section>
@@ -105,9 +107,71 @@
           </div>
           <button id="runNews" class="primary" type="button">Run News Summary</button>
           <div id="newsStatus" class="status-line"></div>
-          <p class="hint">Writes to <code>output/news/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. LLM and news source settings live in <code>config.yaml</code>.</p>
+          <p class="hint">Writes to <code>output/news/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. LLM and news source settings live in <code>config/config.yaml</code>.</p>
         </section>
         <section id="newsPreview" class="panel preview empty">No news summary generated in this session yet.</section>
+      </section>
+
+      <section id="tab-agent" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Agent</h2>
+            <p>Run deeper ReAct-style market research with live search progress and follow-up questions.</p>
+          </div>
+        </div>
+        <section class="panel">
+          <div class="form-grid agent-form">
+            <label>Ticker<input id="agentTicker" value="AAPL" /></label>
+            <label class="wide">Question<input id="agentQuery" value="What is the latest market perception and buy/sell case?" /></label>
+          </div>
+          <button id="runAgent" class="primary" type="button">Run Agent</button>
+          <div id="agentStatus" class="status-line"></div>
+          <p class="hint">Writes to <code>output/agents/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. Agent prompts live in <code>config/prompts/</code>.</p>
+        </section>
+        <section class="panel agent-phone-panel">
+          <div class="agent-phone">
+            <div class="agent-phone-head">
+              <div>
+                <h3>Agent Chat</h3>
+                <p>Live research progress and follow-up questions</p>
+              </div>
+              <span id="agentSessionBadge" class="badge queued">idle</span>
+            </div>
+            <div id="agentConversation" class="agent-conversation empty">No agent run started yet.</div>
+            <div class="agent-chat-form">
+              <input id="agentQuestion" placeholder="Ask about risks, catalysts, valuation, or timing..." />
+              <button id="askAgent" class="ghost" type="button">Ask</button>
+            </div>
+          </div>
+        </section>
+        <section id="agentReport" class="panel preview empty">No agent report generated in this session yet.</section>
+      </section>
+
+      <section id="tab-oracle" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Oracle</h2>
+            <p>Scan broad markets for major disruptions, sudden trend shifts, and high-attention opportunities.</p>
+          </div>
+        </div>
+        <section class="panel">
+          <button id="runOracle" class="primary" type="button">Run Oracle</button>
+          <div id="oracleStatus" class="status-line"></div>
+          <p class="hint">Writes to <code>output/oracle/&lt;timestamp&gt;/</code>. Oracle is designed for quick 10-15 minute market checks and should only alert when attention is warranted.</p>
+        </section>
+        <section class="panel agent-phone-panel">
+          <div class="agent-phone">
+            <div class="agent-phone-head">
+              <div>
+                <h3>Oracle Chat</h3>
+                <p>Live broad-market scan progress</p>
+              </div>
+              <span id="oracleSessionBadge" class="badge queued">idle</span>
+            </div>
+            <div id="oracleConversation" class="agent-conversation empty">No Oracle run started yet.</div>
+          </div>
+        </section>
+        <section id="oracleReport" class="panel preview empty">No Oracle report generated in this session yet.</section>
       </section>
 
       <section id="tab-llm" class="tab">
@@ -153,6 +217,8 @@
           <section class="panel"><h3>Backtests</h3><div id="backtestRuns" class="run-list"></div></section>
           <section class="panel"><h3>Charts</h3><div id="chartRuns" class="run-list"></div></section>
           <section class="panel"><h3>News</h3><div id="newsRuns" class="run-list"></div></section>
+          <section class="panel"><h3>Agents</h3><div id="agentRuns" class="run-list"></div></section>
+          <section class="panel"><h3>Oracle</h3><div id="oracleRuns" class="run-list"></div></section>
         </div>
         <section class="panel viewer-panel">
           <div class="panel-title-row"><h3>Preview</h3><a id="downloadLink" class="download" href="#" target="_blank">Open file</a></div>
@@ -164,7 +230,7 @@
         <div class="page-head">
           <div>
             <h2>Config</h2>
-            <p>Edit the source of truth for tickers, groups, runtime, and backtest settings.</p>
+            <p>Edit <code>config/config.yaml</code>, the source of truth for tickers, groups, runtime, and backtest settings.</p>
           </div>
           <div class="button-row"><button id="loadConfig" class="ghost">Reload</button><button id="saveConfig" class="primary">Save Config</button></div>
         </div>
@@ -185,6 +251,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260426-news-only"></script>
+  <script src="/static/app.js?v=20260426-agent"></script>
 </body>
 </html>

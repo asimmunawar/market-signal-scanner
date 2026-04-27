@@ -171,10 +171,10 @@ runtime:
   refresh_fundamentals_days: 7
 
 # Historical simulation settings. Run with:
-# python market-signal-scanner.py backtest --config config.yaml --output ./output
+# python market-signal-scanner.py backtest --config config/config.yaml --output ./output
 backtest:
   # Backtest start/end date. Leave end_date blank/null to use the latest cached/downloaded date.
-  start_date: "2020-01-01"
+  start_date: "2025-01-01"
   end_date: null
 
   # Starting portfolio cash.
@@ -204,15 +204,15 @@ backtest:
   price_interval: "1d"
   price_period: "max"
 
-# Ticker research agent settings. Run from the GUI Agent tab or:
-# python market-signal-scanner.py agent --ticker AAPL --config config.yaml --output ./output
-agent:
+# Ticker news summary settings. Run from the GUI News Summary tab or:
+# python market-signal-scanner.py news --ticker AAPL --config config/config.yaml --output ./output
+news_summary:
   # Default is local Ollama, so no cloud API key is required.
   provider: "ollama"
 
   # Ollama model name. Pull/start this model locally before using the LLM path:
-  # ollama pull gpt-oss:120b
-  model: "gpt-oss:120b"
+  # ollama pull gpt-oss:20b
+  model: "gpt-oss:20b"
 
   # Local Ollama server URL.
   base_url: "http://127.0.0.1:11434"
@@ -226,8 +226,77 @@ agent:
   # Max news/source items to collect before summarizing.
   max_news_items: 12
 
+  # Free news sources to query before summarizing.
+  news_sources:
+    yfinance_news: true
+    yahoo_rss: true
+    google_news: true
+
   # Google News RSS lookback window for query freshness.
   news_lookback_days: 21
 
   # Include yfinance fundamentals in the research packet when available.
   include_fundamentals: true
+
+# Interactive LangGraph/ReAct-style research agent settings.
+# This powers the GUI Agent tab for deeper web research and follow-up Q&A.
+agent:
+  provider: "ollama"
+  model: "gpt-oss:20b"
+  base_url: "http://127.0.0.1:11434"
+  temperature: 0.2
+  timeout_seconds: 240
+
+  # ReAct/search controls. Larger values are more comprehensive but slower.
+  max_iterations: 4
+  max_search_queries: 5
+  search_results_per_query: 6
+  pages_per_search: 3
+  max_page_chars: 6000
+  search_region: "us-en"
+  include_market_data: true
+
+# Broad-market disruption scanner for the GUI Oracle tab.
+# Intended for quick 10-15 minute checks. Higher alert_threshold = fewer alerts.
+oracle:
+  provider: "ollama"
+  model: "gpt-oss:20b"
+  base_url: "http://127.0.0.1:11434"
+  temperature: 0.15
+  timeout_seconds: 300
+  max_iterations: 4
+  max_search_queries: 8
+  search_results_per_query: 6
+  pages_per_search: 4
+  max_page_chars: 7000
+  search_region: "us-en"
+  alert_threshold: 70
+  pulse_enabled: true
+  # Keep false for unbiased Oracle discovery. When false, pulse verifies tickers found in news first.
+  pulse_use_baseline_tickers: false
+  pulse_include_config_tickers: false
+  pulse_tickers:
+    - SPY
+    - QQQ
+    - IWM
+    - DIA
+    - XLK
+    - XLF
+    - XLE
+    - XLV
+    - XLY
+    - SMH
+    - TLT
+    - GLD
+    - USO
+    - BTC-USD
+    - ETH-USD
+    - AAPL
+    - MSFT
+    - NVDA
+    - TSLA
+  pulse_period: "5d"
+  pulse_interval: "15m"
+  pulse_min_abs_move_pct: 1.5
+  pulse_min_volume_ratio: 1.8
+  pulse_max_rows: 40

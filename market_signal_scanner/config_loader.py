@@ -80,6 +80,53 @@ class NewsSummaryConfig:
 
 
 @dataclass(frozen=True)
+class AgentConfig:
+    provider: str = "ollama"
+    model: str = "gpt-oss:120b"
+    base_url: str = "http://127.0.0.1:11434"
+    temperature: float = 0.2
+    timeout_seconds: int = 240
+    max_iterations: int = 4
+    max_search_queries: int = 5
+    search_results_per_query: int = 6
+    pages_per_search: int = 3
+    max_page_chars: int = 6000
+    search_region: str = "us-en"
+    include_market_data: bool = True
+
+
+@dataclass(frozen=True)
+class OracleConfig:
+    provider: str = "ollama"
+    model: str = "gpt-oss:120b"
+    base_url: str = "http://127.0.0.1:11434"
+    temperature: float = 0.15
+    timeout_seconds: int = 300
+    max_iterations: int = 4
+    max_search_queries: int = 8
+    search_results_per_query: int = 6
+    pages_per_search: int = 4
+    max_page_chars: int = 7000
+    search_region: str = "us-en"
+    alert_threshold: int = 70
+    pulse_enabled: bool = True
+    pulse_use_baseline_tickers: bool = False
+    pulse_include_config_tickers: bool = False
+    pulse_tickers: list[str] = field(default_factory=lambda: [
+        "SPY", "QQQ", "IWM", "DIA",
+        "XLK", "XLF", "XLE", "XLV", "XLY", "XLI", "XLP", "XLU", "XLB", "XLRE",
+        "SMH", "ARKK", "TLT", "HYG", "GLD", "SLV", "USO", "UUP",
+        "BTC-USD", "ETH-USD",
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA",
+    ])
+    pulse_period: str = "5d"
+    pulse_interval: str = "15m"
+    pulse_min_abs_move_pct: float = 1.5
+    pulse_min_volume_ratio: float = 1.8
+    pulse_max_rows: int = 40
+
+
+@dataclass(frozen=True)
 class ScannerConfig:
     tickers: list[str] = field(default_factory=list)
     groups: dict[str, bool] = field(default_factory=dict)
@@ -87,6 +134,8 @@ class ScannerConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     news_summary: NewsSummaryConfig = field(default_factory=NewsSummaryConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
+    oracle: OracleConfig = field(default_factory=OracleConfig)
 
 
 def load_config(path: str | Path) -> ScannerConfig:
@@ -102,6 +151,9 @@ def load_config(path: str | Path) -> ScannerConfig:
     backtest = raw.get("backtest") or {}
     news_summary = raw.get("news_summary") or {}
     news_sources = news_summary.get("news_sources") or news_summary.get("sources") or {}
+    agent = raw.get("agent") or {}
+    oracle = raw.get("oracle") or {}
+    oracle_pulse_tickers = oracle.get("pulse_tickers")
 
     return ScannerConfig(
         tickers=[normalize_ticker(t) for t in raw.get("tickers", []) if t],
@@ -150,6 +202,47 @@ def load_config(path: str | Path) -> ScannerConfig:
                 "google_news": bool(news_sources.get("google_news", True)),
             },
             include_fundamentals=bool(news_summary.get("include_fundamentals", True)),
+        ),
+        agent=AgentConfig(
+            provider=str(agent.get("provider", news_summary.get("provider", "ollama"))).strip().lower(),
+            model=str(agent.get("model", news_summary.get("model", "gpt-oss:120b"))).strip(),
+            base_url=str(agent.get("base_url", news_summary.get("base_url", "http://127.0.0.1:11434"))).rstrip("/"),
+            temperature=float(agent.get("temperature", news_summary.get("temperature", 0.2))),
+            timeout_seconds=max(10, int(agent.get("timeout_seconds", 240))),
+            max_iterations=max(1, int(agent.get("max_iterations", 4))),
+            max_search_queries=max(1, int(agent.get("max_search_queries", 5))),
+            search_results_per_query=max(1, int(agent.get("search_results_per_query", 6))),
+            pages_per_search=max(0, int(agent.get("pages_per_search", 3))),
+            max_page_chars=max(500, int(agent.get("max_page_chars", 6000))),
+            search_region=str(agent.get("search_region", "us-en")).strip(),
+            include_market_data=bool(agent.get("include_market_data", True)),
+        ),
+        oracle=OracleConfig(
+            provider=str(oracle.get("provider", agent.get("provider", news_summary.get("provider", "ollama")))).strip().lower(),
+            model=str(oracle.get("model", agent.get("model", news_summary.get("model", "gpt-oss:120b")))).strip(),
+            base_url=str(oracle.get("base_url", agent.get("base_url", news_summary.get("base_url", "http://127.0.0.1:11434")))).rstrip("/"),
+            temperature=float(oracle.get("temperature", 0.15)),
+            timeout_seconds=max(10, int(oracle.get("timeout_seconds", 300))),
+            max_iterations=max(1, int(oracle.get("max_iterations", 4))),
+            max_search_queries=max(1, int(oracle.get("max_search_queries", 8))),
+            search_results_per_query=max(1, int(oracle.get("search_results_per_query", 6))),
+            pages_per_search=max(0, int(oracle.get("pages_per_search", 4))),
+            max_page_chars=max(500, int(oracle.get("max_page_chars", 7000))),
+            search_region=str(oracle.get("search_region", "us-en")).strip(),
+            alert_threshold=max(0, min(100, int(oracle.get("alert_threshold", 70)))),
+            pulse_enabled=bool(oracle.get("pulse_enabled", True)),
+            pulse_use_baseline_tickers=bool(oracle.get("pulse_use_baseline_tickers", False)),
+            pulse_include_config_tickers=bool(oracle.get("pulse_include_config_tickers", False)),
+            pulse_tickers=(
+                [normalize_ticker(t) for t in oracle_pulse_tickers if t]
+                if isinstance(oracle_pulse_tickers, list)
+                else OracleConfig().pulse_tickers
+            ),
+            pulse_period=str(oracle.get("pulse_period", "5d")).strip(),
+            pulse_interval=str(oracle.get("pulse_interval", "15m")).strip(),
+            pulse_min_abs_move_pct=max(0.0, float(oracle.get("pulse_min_abs_move_pct", 1.5))),
+            pulse_min_volume_ratio=max(0.0, float(oracle.get("pulse_min_volume_ratio", 1.8))),
+            pulse_max_rows=max(1, int(oracle.get("pulse_max_rows", 40))),
         ),
     )
 
