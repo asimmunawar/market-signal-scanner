@@ -6,7 +6,8 @@
   <title>market-signal-scanner</title>
   <link rel="icon" type="image/png" href="/static/assets/app-icon-small.png" />
   <link rel="apple-touch-icon" href="/static/assets/app-icon.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260427-light-report-blocks" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260428-themes" />
+  <link rel="stylesheet" href="/api/ui/theme.css?v=20260428-themes" />
 </head>
 <body>
   <div class="app-shell">
@@ -25,6 +26,7 @@
         <button class="nav-button" data-tab="news">News Summary</button>
         <button class="nav-button" data-tab="agent">Agent</button>
         <button class="nav-button" data-tab="trend-catcher">Trend Catcher</button>
+        <div class="nav-divider" aria-hidden="true"></div>
         <button class="nav-button" data-tab="llm">LLM</button>
         <button class="nav-button" data-tab="outputs">Outputs</button>
         <button class="nav-button" data-tab="config">Config</button>
@@ -202,6 +204,10 @@
           </div>
         </section>
         <div id="agentStatus" class="status-line"></div>
+        <section class="panel agent-suggestions" aria-label="Suggested agent questions">
+          <div class="agent-suggestions-title">Common questions</div>
+          <div id="agentSuggestions" class="agent-suggestion-list"></div>
+        </section>
       </section>
 
       <section id="tab-trend-catcher" class="tab">
@@ -308,6 +314,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260427-trend-catcher-chat"></script>
+  <script src="/static/app.js?v=20260428-agent-suggestions-bottom"></script>
 </body>
 </html>

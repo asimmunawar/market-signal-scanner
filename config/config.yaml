@@ -170,6 +170,10 @@ runtime:
   # Reuse cached fundamentals until they are older than this many days.
   refresh_fundamentals_days: 7
 
+# GUI color theme. Options: green, blue, slate, indigo, red, gold, teal.
+ui:
+  theme: "teal"
+
 # Historical simulation settings. Run with:
 # python market-signal-scanner.py backtest --config config/config.yaml --output ./output
 backtest:
@@ -258,6 +262,21 @@ agent:
   search_region: "us-en"
   include_market_data: true
 
+  suggested_questions:
+    - "Where should I invest $100 today for the long term, and why?"
+    - "What are the most attractive risk/reward opportunities in the market right now?"
+    - "What market risks should I pay attention to this week?"
+    - "Which sectors look strongest right now, and what is driving them?"
+    - "Which stocks or ETFs should I avoid right now, and why?"
+    - "What changed in markets today that could matter for long-term investors?"
+
+    - "How should I allocate my portfolio right now?"
+    - "Is now a good time to invest or wait?"
+    - "Should I dollar-cost average or invest all at once?"
+    - "Is this stock overvalued or undervalued?"
+    - "What are the biggest risks to my portfolio right now?"
+    - "How can I reduce taxes on my investments?"
+
 # Broad-market disruption scanner for the GUI Trend Catcher tab.
 # Intended for quick 10-15 minute checks. Higher alert_threshold = fewer alerts.
 oracle:
@@ -276,7 +295,7 @@ oracle:
   # Trend Catcher only uses timestamped sources inside this recent window for alert decisions.
   source_lookback_hours: 48
   require_source_dates: true
-  pulse_enabled: true
+  pulse_enabled: false
   # Keep false for unbiased Trend Catcher discovery. When false, pulse verifies tickers found in news first.
   pulse_use_baseline_tickers: false
   pulse_include_config_tickers: false

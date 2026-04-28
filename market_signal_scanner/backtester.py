@@ -414,7 +414,7 @@ def build_backtest_report(summary: dict[str, Any], trades: pd.DataFrame, config:
     if trades.empty:
         lines.append("No trades were generated.")
     else:
-        largest = trades.sort_values("notional", ascending=False).head(20).copy()
+        largest = trades.sort_values("notional", ascending=False).head(10).copy()
         lines.append(markdown_table(largest[["date", "ticker", "action", "shares", "price", "notional", "transaction_cost", "reason"]]))
     return "\n".join(lines).rstrip() + "\n"
 

@@ -317,30 +317,18 @@ def build_chart_report(options: ChartOptions, signals: dict[str, Any], levels: l
         f"- Annualized volatility: {fmt_pct(signals.get('volatility_annual'))}",
         f"- Max drawdown: {fmt_pct(signals.get('max_drawdown'))}",
         "",
-        "## What The Markings Mean",
-        "",
-        "- Candles: each candle shows open, high, low, and close for the configured interval.",
-        "- Moving averages: smooth price trends; price above longer averages usually indicates constructive trend.",
-        "- Bollinger bands: show a two-standard-deviation envelope around the 20-period average; touches can indicate stretched price action, not automatic reversals.",
-        "- Horizontal support lines: nearby historical pivot lows where buyers previously appeared.",
-        "- Horizontal resistance lines: nearby historical pivot highs where sellers previously appeared.",
-        "- Diagonal trendlines: sloped support/resistance fitted through recent pivot lows/highs to show rising, falling, or channel-like structure.",
-        "- Volume panel: compares current participation with recent average volume.",
-        "- RSI: momentum oscillator; above 70 can be overbought, below 30 can be oversold.",
-        "- MACD: trend/momentum oscillator; MACD above signal is bullish momentum, below signal is bearish momentum.",
-        "",
         "## Nearby Horizontal Support / Resistance",
         "",
     ]
     if levels:
-        for level in levels:
+        for level in levels[:5]:
             lines.append(f"- {level['type'].title()}: {level['price']:.2f} ({level['distance_pct']:+.2%} from last close)")
     else:
         lines.append("- No clear nearby pivot levels found in the selected lookback window.")
 
     lines.extend(["", "## Diagonal Trendlines", ""])
     if trendlines:
-        for line in trendlines:
+        for line in trendlines[:3]:
             lines.append(f"- {line['label']}: currently near {line['values'][-1]:.2f}, slope {line['slope_per_bar']:+.4f} price units per bar, fitted from {line['points_used']} pivots.")
     else:
         lines.append("- No reliable diagonal trendlines found from recent pivots.")
@@ -349,11 +337,11 @@ def build_chart_report(options: ChartOptions, signals: dict[str, Any], levels: l
         "",
         "## Positive Signals",
         "",
-        *(f"- {item}" for item in positives),
+        *(f"- {item}" for item in positives[:4]),
         "",
         "## Negative / Caution Signals",
         "",
-        *(f"- {item}" for item in negatives),
+        *(f"- {item}" for item in negatives[:4]),
     ])
     return "\n".join(lines).rstrip() + "\n"
 

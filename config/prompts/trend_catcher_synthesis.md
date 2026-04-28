@@ -18,7 +18,7 @@ Evidence gathered:
 Your job:
 Decide whether a new market trend, catalyst, or attention shift appears to be forming early enough that the user should look now. This may be a buy opportunity, a sell/avoid warning, or a "watch immediately" setup. Do not favor any asset class or sector by default.
 
-Write a concise Markdown alert report.
+Write a compact Markdown alert report.
 
 If there is no major actionable disruption, start with:
 # Trend Catcher: Nothing Urgent
@@ -72,6 +72,9 @@ Give concrete catalysts/data/headlines to monitor. Include 2-5 specific next che
 Cite evidence using [1], [2], etc.
 
 Rules:
+- Keep the full report under 500 words.
+- Use 1-3 bullets per section after Attention Verdict.
+- Each bullet must be one sentence.
 - If no evidence was gathered, do not identify a trend, alert, catalyst, beneficiary, loser, buy signal, or sell warning. Say Trend Catcher is unable to assess because source evidence is missing.
 - Use only the supplied evidence and intraday market pulse. Do not use prior model knowledge or memory.
 - Treat the Current date above as authoritative. Do not infer today's news from model memory.

@@ -13,7 +13,7 @@ Fundamental snapshot:
 Recent source list:
 {sources_text}
 
-Write a source-grounded research memo in Markdown with these sections:
+Write a compact source-grounded research memo in Markdown with these sections:
 1. Verdict
 2. Buy Case
 3. Sell / Avoid Case
@@ -24,6 +24,9 @@ Write a source-grounded research memo in Markdown with these sections:
 8. Source Notes
 
 Rules:
+- Keep the full report under 450 words.
+- Use 1-3 bullets per section.
+- Each bullet must be one sentence.
 - If the Recent source list says no sources were found, do not write a buy/sell thesis, catalyst list, prediction, or market narrative. Say that source evidence is insufficient.
 - Use only the provided source list, technical signals, and fundamental snapshot. Do not use prior model knowledge or memory.
 - Treat the Current date above as authoritative. Do not use model memory for current events.

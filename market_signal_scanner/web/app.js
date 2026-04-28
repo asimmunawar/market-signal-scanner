@@ -67,7 +67,10 @@ function loadTabData(tab) {
   if (tab === 'activity') loadActivity();
   if (tab === 'config') loadConfig();
   if (tab === 'llm') loadLlmStatus();
-  if (tab === 'agent') restoreAgentSession();
+  if (tab === 'agent') {
+    loadAgentSuggestions();
+    restoreAgentSession();
+  }
   if (tab === 'trend-catcher') restoreTrendCatcherSession();
 }
 
@@ -87,6 +90,38 @@ async function api(path, options = {}) {
     throw new Error(detail);
   }
   return response;
+}
+
+function refreshThemeStylesheet() {
+  const themeLink = document.querySelector('link[href^="/api/ui/theme.css"]');
+  if (!themeLink) return;
+  themeLink.href = `/api/ui/theme.css?v=${Date.now()}`;
+}
+
+async function loadAgentSuggestions() {
+  const box = $('agentSuggestions');
+  if (!box) return;
+  try {
+    const data = await (await api('/api/agent/suggested-questions')).json();
+    renderAgentSuggestions(data.questions || []);
+  } catch (error) {
+    box.innerHTML = '';
+  }
+}
+
+function renderAgentSuggestions(questions) {
+  const box = $('agentSuggestions');
+  if (!box) return;
+  box.innerHTML = questions.map((question) => (
+    `<button class="agent-suggestion-button" type="button" data-question="${escapeHtml(question)}">${escapeHtml(question)}</button>`
+  )).join('');
+}
+
+function useAgentSuggestion(question) {
+  const input = $('agentQuestion');
+  input.value = question;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
 }
 
 async function createJob(payload) {
@@ -575,9 +610,9 @@ function renderAgentSession(session) {
   localStorage.setItem('marketSignalScanner.agentSessionId', session.id);
   $('agentSessionBadge').className = `badge ${session.status}`;
   $('agentSessionBadge').textContent = session.status;
-  const out = session.output_dir ? ` Output: agents/${session.output_dir}.` : '';
-  const err = session.error ? ` Error: ${session.error}.` : '';
-  $('agentStatus').textContent = `Agent ${session.status}.${out}${err}`;
+  const out = session.output_dir && isTerminalStatus(session.status) ? `Output: agents/${session.output_dir}.` : '';
+  const err = session.error ? `Agent ${session.status}: ${session.error}.` : '';
+  $('agentStatus').textContent = err || out;
   renderAgentConversation(session);
   $('askAgent').disabled = !isTerminalStatus(session.status);
   $('askAgent').textContent = isTerminalStatus(session.status) ? 'Ask' : 'Researching...';
@@ -854,6 +889,7 @@ async function saveConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: $('configEditor').value }),
     });
+    refreshThemeStylesheet();
     $('configStatus').textContent = 'Saved config/config.yaml.';
   } catch (error) {
     $('configStatus').textContent = `Save failed: ${error.message}`;
@@ -982,6 +1018,10 @@ function wireActions() {
   $('runTrendCatcher').addEventListener('click', startTrendCatcherFromUi);
   $('resetAgent').addEventListener('click', resetAgentConversation);
   $('askAgent').addEventListener('click', askAgentQuestion);
+  $('agentSuggestions').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-question]');
+    if (button) useAgentSuggestion(button.dataset.question || '');
+  });
   $('agentQuestion').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') askAgentQuestion();
   });

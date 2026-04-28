@@ -26,6 +26,16 @@ DEFAULT_CRYPTO_TOP = [
 ]
 
 
+DEFAULT_AGENT_SUGGESTED_QUESTIONS = [
+    "Where should I invest $100 today for the long term, and why?",
+    "What are the most attractive risk/reward opportunities in the market right now?",
+    "What market risks should I pay attention to this week?",
+    "Which sectors look strongest right now, and what is driving them?",
+    "Which stocks or ETFs should I avoid right now, and why?",
+    "What changed in markets today that could matter for long-term investors?",
+]
+
+
 @dataclass(frozen=True)
 class LimitsConfig:
     max_tickers: int = 500
@@ -93,6 +103,7 @@ class AgentConfig:
     max_page_chars: int = 6000
     search_region: str = "us-en"
     include_market_data: bool = True
+    suggested_questions: list[str] = field(default_factory=lambda: list(DEFAULT_AGENT_SUGGESTED_QUESTIONS))
 
 
 @dataclass(frozen=True)
@@ -129,6 +140,11 @@ class OracleConfig:
 
 
 @dataclass(frozen=True)
+class UIConfig:
+    theme: str = "green"
+
+
+@dataclass(frozen=True)
 class ScannerConfig:
     tickers: list[str] = field(default_factory=list)
     groups: dict[str, bool] = field(default_factory=dict)
@@ -138,6 +154,7 @@ class ScannerConfig:
     news_summary: NewsSummaryConfig = field(default_factory=NewsSummaryConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     oracle: OracleConfig = field(default_factory=OracleConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
 
 
 def load_config(path: str | Path) -> ScannerConfig:
@@ -155,6 +172,10 @@ def load_config(path: str | Path) -> ScannerConfig:
     news_sources = news_summary.get("news_sources") or news_summary.get("sources") or {}
     agent = raw.get("agent") or {}
     oracle = raw.get("oracle") or {}
+    ui = raw.get("ui") or {}
+    agent_suggested_questions = agent.get("suggested_questions", DEFAULT_AGENT_SUGGESTED_QUESTIONS)
+    if not isinstance(agent_suggested_questions, list):
+        agent_suggested_questions = DEFAULT_AGENT_SUGGESTED_QUESTIONS
     oracle_pulse_tickers = oracle.get("pulse_tickers")
 
     return ScannerConfig(
@@ -218,6 +239,11 @@ def load_config(path: str | Path) -> ScannerConfig:
             max_page_chars=max(500, int(agent.get("max_page_chars", 6000))),
             search_region=str(agent.get("search_region", "us-en")).strip(),
             include_market_data=bool(agent.get("include_market_data", True)),
+            suggested_questions=[
+                str(question).strip()
+                for question in agent_suggested_questions
+                if str(question).strip()
+            ],
         ),
         oracle=OracleConfig(
             provider=str(oracle.get("provider", agent.get("provider", news_summary.get("provider", "ollama")))).strip().lower(),
@@ -247,6 +273,9 @@ def load_config(path: str | Path) -> ScannerConfig:
             pulse_min_abs_move_pct=max(0.0, float(oracle.get("pulse_min_abs_move_pct", 1.5))),
             pulse_min_volume_ratio=max(0.0, float(oracle.get("pulse_min_volume_ratio", 1.8))),
             pulse_max_rows=max(1, int(oracle.get("pulse_max_rows", 40))),
+        ),
+        ui=UIConfig(
+            theme=str(ui.get("theme", "green")).strip().lower(),
         ),
     )
 

@@ -52,6 +52,17 @@ It combines deterministic quant-style signals with local AI research so the outp
 | Agent | Performs deeper ticker or question-based research with follow-up chat | `output/agents/` |
 | Trend Catcher | Searches for newly forming market trends without starting from a ticker | `output/trend-catcher/` |
 
+## How Sources Are Chosen
+
+Not every workflow uses sources the same way:
+
+- **Scanner** uses the fixed ticker universe from `config/config.yaml`. It does not search narrative pages; it fetches market and fundamental data for the configured tickers/groups.
+- **News Summary** uses configured source channels, such as `yfinance_news`, `yahoo_rss`, and `google_news`. The channels are fixed by config, but the articles returned inside them are dynamic.
+- **Agent** performs dynamic web research based on the user's question. Its exact pages can change between runs because search results, source freshness, and rankings change.
+- **Trend Catcher** performs dynamic recent market/news discovery. When ticker pulse is disabled, it does not start from a fixed ticker list; it looks for current broad-market evidence first.
+
+The relevant search depth and source limits live in `news_summary`, `agent`, and `oracle` sections of `config/config.yaml`.
+
 ## Trend Catcher
 
 Trend Catcher is the “do not let me miss the move” mode.

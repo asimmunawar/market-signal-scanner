@@ -26,8 +26,8 @@ def build_report(scored: pd.DataFrame) -> str:
         generated = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z%z")
         return f"# Portfolio Scanner Report\n\nGenerated: {generated}\n\nNo valid ticker data was available.\n\nThis is not financial advice.\n"
 
-    buys = scored[scored["recommendation"].isin(["Strong Buy", "Buy"])].head(20)
-    sells = scored[scored["recommendation"].isin(["Strong Sell", "Sell"])].sort_values("score").head(20)
+    buys = scored[scored["recommendation"].isin(["Strong Buy", "Buy"])].head(10)
+    sells = scored[scored["recommendation"].isin(["Strong Sell", "Sell"])].sort_values("score").head(10)
     hold_count = int((scored["recommendation"] == "Hold").sum())
 
     lines = [
@@ -67,7 +67,7 @@ def build_report(scored: pd.DataFrame) -> str:
         "",
     ]
 
-    focus = pd.concat([buys.head(10), sells.sort_values("score").head(10)]).drop_duplicates(subset=["ticker"])
+    focus = pd.concat([buys.head(3), sells.sort_values("score").head(3)]).drop_duplicates(subset=["ticker"])
     for _, row in focus.iterrows():
         lines.extend(explain_row(row))
         lines.append("")
@@ -119,8 +119,8 @@ def explain_row(row: pd.Series) -> list[str]:
         "",
         f"- Score: {row['score']:.2f}",
         f"- Recommendation: {row['recommendation']}",
-        f"- Strongest positive signals: {', '.join(positives) if positives else 'None prominent'}",
-        f"- Strongest negative signals: {', '.join(negatives) if negatives else 'None prominent'}",
+        f"- Positives: {', '.join(positives[:3]) if positives else 'None prominent'}",
+        f"- Negatives: {', '.join(negatives[:3]) if negatives else 'None prominent'}",
         f"- Reasoning: {reasoning}",
     ]
 

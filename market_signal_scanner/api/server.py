@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -93,12 +93,241 @@ managed_ollama_process: Optional[subprocess.Popen[str]] = None
 llm_lock = threading.Lock()
 
 
+THEME_COLORS: dict[str, dict[str, str]] = {
+    "green": {
+        "bg": "#f4f6f8",
+        "panel": "#ffffff",
+        "ink": "#17212b",
+        "muted": "#667085",
+        "line": "#d9e0e7",
+        "code-bg": "#f8fafc",
+        "code-border": "#d6dee7",
+        "code-ink": "#182230",
+        "accent": "#0f766e",
+        "accent-strong": "#115e59",
+        "accent-rgb": "15, 118, 110",
+        "accent-soft": "rgba(15, 118, 110, 0.08)",
+        "accent-border": "rgba(15, 118, 110, 0.18)",
+        "accent-border-strong": "rgba(15, 118, 110, 0.45)",
+        "danger": "#b42318",
+        "warning": "#b54708",
+        "selection-bg": "#c7f0ea",
+        "selection-ink": "#101820",
+        "sidebar-bg": "#101820",
+        "sidebar-ink": "#ffffff",
+        "sidebar-muted": "#aab5c0",
+        "sidebar-line": "rgba(214, 222, 231, 0.18)",
+        "sidebar-active-bg": "rgba(45, 212, 191, 0.12)",
+        "sidebar-active-border": "rgba(45, 212, 191, 0.28)",
+        "chat-bg": "#e8eee9",
+        "chat-head-bg": "#075e54",
+        "chat-outgoing-bg": "#dcf8c6",
+        "shadow": "0 12px 30px rgba(15, 23, 42, 0.08)",
+    },
+    "blue": {
+        "bg": "#f5f7fb",
+        "panel": "#ffffff",
+        "ink": "#172033",
+        "muted": "#64748b",
+        "line": "#d8e1ee",
+        "code-bg": "#f8fbff",
+        "code-border": "#d5e0ef",
+        "code-ink": "#172033",
+        "accent": "#2563eb",
+        "accent-strong": "#1d4ed8",
+        "accent-rgb": "37, 99, 235",
+        "accent-soft": "rgba(37, 99, 235, 0.08)",
+        "accent-border": "rgba(37, 99, 235, 0.18)",
+        "accent-border-strong": "rgba(37, 99, 235, 0.45)",
+        "danger": "#b42318",
+        "warning": "#b54708",
+        "selection-bg": "#dbeafe",
+        "selection-ink": "#0f172a",
+        "sidebar-bg": "#13233f",
+        "sidebar-ink": "#ffffff",
+        "sidebar-muted": "#bfdbfe",
+        "sidebar-line": "rgba(191, 219, 254, 0.18)",
+        "sidebar-active-bg": "rgba(59, 130, 246, 0.18)",
+        "sidebar-active-border": "rgba(59, 130, 246, 0.38)",
+        "chat-bg": "#eaf2ff",
+        "chat-head-bg": "#1d4ed8",
+        "chat-outgoing-bg": "#dbeafe",
+        "shadow": "0 12px 30px rgba(30, 64, 175, 0.08)",
+    },
+    "slate": {
+        "bg": "#f6f7f9",
+        "panel": "#ffffff",
+        "ink": "#111827",
+        "muted": "#64748b",
+        "line": "#d8dee8",
+        "code-bg": "#f8fafc",
+        "code-border": "#d7dee8",
+        "code-ink": "#111827",
+        "accent": "#475569",
+        "accent-strong": "#334155",
+        "accent-rgb": "71, 85, 105",
+        "accent-soft": "rgba(71, 85, 105, 0.08)",
+        "accent-border": "rgba(71, 85, 105, 0.18)",
+        "accent-border-strong": "rgba(71, 85, 105, 0.45)",
+        "danger": "#b42318",
+        "warning": "#b54708",
+        "selection-bg": "#e2e8f0",
+        "selection-ink": "#0f172a",
+        "sidebar-bg": "#172033",
+        "sidebar-ink": "#ffffff",
+        "sidebar-muted": "#cbd5e1",
+        "sidebar-line": "rgba(203, 213, 225, 0.18)",
+        "sidebar-active-bg": "rgba(148, 163, 184, 0.16)",
+        "sidebar-active-border": "rgba(148, 163, 184, 0.35)",
+        "chat-bg": "#eef2f6",
+        "chat-head-bg": "#334155",
+        "chat-outgoing-bg": "#e2e8f0",
+        "shadow": "0 12px 30px rgba(15, 23, 42, 0.08)",
+    },
+    "indigo": {
+        "bg": "#f7f7fc",
+        "panel": "#ffffff",
+        "ink": "#1e1b2e",
+        "muted": "#6b7280",
+        "line": "#dddff0",
+        "code-bg": "#fafaff",
+        "code-border": "#dcdef0",
+        "code-ink": "#1e1b2e",
+        "accent": "#4f46e5",
+        "accent-strong": "#4338ca",
+        "accent-rgb": "79, 70, 229",
+        "accent-soft": "rgba(79, 70, 229, 0.08)",
+        "accent-border": "rgba(79, 70, 229, 0.18)",
+        "accent-border-strong": "rgba(79, 70, 229, 0.45)",
+        "danger": "#b42318",
+        "warning": "#b54708",
+        "selection-bg": "#e0e7ff",
+        "selection-ink": "#1e1b4b",
+        "sidebar-bg": "#1e1b4b",
+        "sidebar-ink": "#ffffff",
+        "sidebar-muted": "#c7d2fe",
+        "sidebar-line": "rgba(199, 210, 254, 0.18)",
+        "sidebar-active-bg": "rgba(129, 140, 248, 0.18)",
+        "sidebar-active-border": "rgba(129, 140, 248, 0.38)",
+        "chat-bg": "#eef0ff",
+        "chat-head-bg": "#4338ca",
+        "chat-outgoing-bg": "#e0e7ff",
+        "shadow": "0 12px 30px rgba(67, 56, 202, 0.08)",
+    },
+    "red": {
+        "bg": "#f8f6f6",
+        "panel": "#ffffff",
+        "ink": "#241a1a",
+        "muted": "#706565",
+        "line": "#eadada",
+        "code-bg": "#fffafa",
+        "code-border": "#eadada",
+        "code-ink": "#241a1a",
+        "accent": "#dc2626",
+        "accent-strong": "#b91c1c",
+        "accent-rgb": "220, 38, 38",
+        "accent-soft": "rgba(220, 38, 38, 0.08)",
+        "accent-border": "rgba(220, 38, 38, 0.18)",
+        "accent-border-strong": "rgba(220, 38, 38, 0.45)",
+        "danger": "#b42318",
+        "warning": "#b54708",
+        "selection-bg": "#fee2e2",
+        "selection-ink": "#450a0a",
+        "sidebar-bg": "#3b1717",
+        "sidebar-ink": "#ffffff",
+        "sidebar-muted": "#fecaca",
+        "sidebar-line": "rgba(254, 202, 202, 0.18)",
+        "sidebar-active-bg": "rgba(248, 113, 113, 0.18)",
+        "sidebar-active-border": "rgba(248, 113, 113, 0.38)",
+        "chat-bg": "#fff0f0",
+        "chat-head-bg": "#b91c1c",
+        "chat-outgoing-bg": "#fee2e2",
+        "shadow": "0 12px 30px rgba(153, 27, 27, 0.08)",
+    },
+    "gold": {
+        "bg": "#f8f7f2",
+        "panel": "#ffffff",
+        "ink": "#241f18",
+        "muted": "#71695c",
+        "line": "#e6dfd0",
+        "code-bg": "#fffdf7",
+        "code-border": "#e6dfd0",
+        "code-ink": "#241f18",
+        "accent": "#b7791f",
+        "accent-strong": "#92400e",
+        "accent-rgb": "183, 121, 31",
+        "accent-soft": "rgba(183, 121, 31, 0.09)",
+        "accent-border": "rgba(183, 121, 31, 0.20)",
+        "accent-border-strong": "rgba(183, 121, 31, 0.45)",
+        "danger": "#b42318",
+        "warning": "#b54708",
+        "selection-bg": "#fef3c7",
+        "selection-ink": "#422006",
+        "sidebar-bg": "#372710",
+        "sidebar-ink": "#ffffff",
+        "sidebar-muted": "#fde68a",
+        "sidebar-line": "rgba(253, 230, 138, 0.18)",
+        "sidebar-active-bg": "rgba(245, 158, 11, 0.18)",
+        "sidebar-active-border": "rgba(245, 158, 11, 0.38)",
+        "chat-bg": "#f8f1df",
+        "chat-head-bg": "#92400e",
+        "chat-outgoing-bg": "#fef3c7",
+        "shadow": "0 12px 30px rgba(146, 64, 14, 0.08)",
+    },
+    "teal": {
+        "bg": "#f3f8fa",
+        "panel": "#ffffff",
+        "ink": "#14232b",
+        "muted": "#637782",
+        "line": "#d5e5ea",
+        "code-bg": "#f8fcfd",
+        "code-border": "#d5e5ea",
+        "code-ink": "#14232b",
+        "accent": "#0891b2",
+        "accent-strong": "#0e7490",
+        "accent-rgb": "8, 145, 178",
+        "accent-soft": "rgba(8, 145, 178, 0.08)",
+        "accent-border": "rgba(8, 145, 178, 0.18)",
+        "accent-border-strong": "rgba(8, 145, 178, 0.45)",
+        "danger": "#b42318",
+        "warning": "#b54708",
+        "selection-bg": "#cffafe",
+        "selection-ink": "#083344",
+        "sidebar-bg": "#083344",
+        "sidebar-ink": "#ffffff",
+        "sidebar-muted": "#a5f3fc",
+        "sidebar-line": "rgba(165, 243, 252, 0.18)",
+        "sidebar-active-bg": "rgba(34, 211, 238, 0.16)",
+        "sidebar-active-border": "rgba(34, 211, 238, 0.36)",
+        "chat-bg": "#e6f6f8",
+        "chat-head-bg": "#0e7490",
+        "chat-outgoing-bg": "#cffafe",
+        "shadow": "0 12px 30px rgba(14, 116, 144, 0.08)",
+    },
+}
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(WEB_ROOT / "index.html")
 
 
 app.mount("/static", StaticFiles(directory=WEB_ROOT), name="static")
+
+
+@app.get("/api/ui/theme.css")
+def ui_theme_css() -> Response:
+    try:
+        theme_name = load_config(CONFIG_PATH).ui.theme
+    except Exception:
+        theme_name = "green"
+    colors = THEME_COLORS.get(theme_name, THEME_COLORS["green"])
+    declarations = "\n".join(f"  --{name}: {value};" for name, value in colors.items())
+    return Response(
+        content=f":root {{\n{declarations}\n}}\n",
+        media_type="text/css",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.post("/api/shutdown")
@@ -188,6 +417,12 @@ def get_config() -> str:
     if not CONFIG_PATH.exists():
         raise HTTPException(status_code=404, detail="config/config.yaml not found")
     return CONFIG_PATH.read_text(encoding="utf-8")
+
+
+@app.get("/api/agent/suggested-questions")
+def get_agent_suggested_questions() -> dict[str, Any]:
+    config = load_config(CONFIG_PATH)
+    return {"questions": config.agent.suggested_questions}
 
 
 @app.post("/api/config")

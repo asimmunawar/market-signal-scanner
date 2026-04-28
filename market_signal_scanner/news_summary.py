@@ -285,7 +285,7 @@ def build_prompt(state: NewsSummaryState) -> str:
     fundamentals = compact_fundamentals(state.fundamentals)
     sources = "\n".join(
         f"{index}. {source.title} | {source.publisher or 'unknown'} | {source.published or 'undated'} | {source.url}\n   {source.summary[:350]}"
-        for index, source in enumerate(state.sources, start=1)
+        for index, source in enumerate(state.sources[:8], start=1)
     ) or "No recent news sources were found."
     return load_prompt("news_summary.md").format(
         ticker=state.ticker,
@@ -451,7 +451,7 @@ Sources reviewed: {source_count}
 
 ## Source Links
 
-{format_source_notes(state.sources)}
+{format_source_notes(state.sources[:8])}
 """
 
 

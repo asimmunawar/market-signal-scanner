@@ -646,7 +646,7 @@ def extract_json(text: str) -> str:
 
 def fallback_trend_catcher_report(state: TrendCatcherState) -> str:
     evidence = state.get("evidence", [])
-    lines = "\n".join(f"- [{i}] [{item.title}]({item.url})" for i, item in enumerate(evidence, 1)) or "- No sources captured."
+    lines = "\n".join(f"- [{i}] [{item.title}]({item.url})" for i, item in enumerate(evidence[:5], 1)) or "- No sources captured."
     return f"""# Trend Catcher: Needs Manual Review
 
 Trend Catcher could not complete LLM synthesis, so no high-confidence alert decision was produced.
@@ -663,9 +663,7 @@ Trend Catcher could not complete LLM synthesis, so no high-confidence alert deci
 
 {lines}
 
-## Note
-
-Review the sources manually. This is analytical research, not financial advice.
+This is analytical research, not financial advice.
 """
 
 
@@ -695,11 +693,6 @@ No alert is produced from this run. This means **insufficient evidence**, not "n
 
 - Check internet access and configured sources.
 - Re-run Trend Catcher when search/news access is available.
-- Use primary news, filings, exchange notices, and price/volume data directly if this was during a possible market-moving event.
-
-## Source Notes
-
-- No source links captured.
 
 This is analytical research, not financial advice.
 """
