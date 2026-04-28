@@ -109,6 +109,8 @@ class OracleConfig:
     max_page_chars: int = 7000
     search_region: str = "us-en"
     alert_threshold: int = 70
+    source_lookback_hours: int = 48
+    require_source_dates: bool = True
     pulse_enabled: bool = True
     pulse_use_baseline_tickers: bool = False
     pulse_include_config_tickers: bool = False
@@ -230,6 +232,8 @@ def load_config(path: str | Path) -> ScannerConfig:
             max_page_chars=max(500, int(oracle.get("max_page_chars", 7000))),
             search_region=str(oracle.get("search_region", "us-en")).strip(),
             alert_threshold=max(0, min(100, int(oracle.get("alert_threshold", 70)))),
+            source_lookback_hours=max(1, int(oracle.get("source_lookback_hours", 48))),
+            require_source_dates=bool(oracle.get("require_source_dates", True)),
             pulse_enabled=bool(oracle.get("pulse_enabled", True)),
             pulse_use_baseline_tickers=bool(oracle.get("pulse_use_baseline_tickers", False)),
             pulse_include_config_tickers=bool(oracle.get("pulse_include_config_tickers", False)),

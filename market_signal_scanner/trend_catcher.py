@@ -15,10 +15,15 @@ from market_signal_scanner.agent_researcher import (
     AgentEvidence,
     call_ollama,
     call_logged_ollama,
+    current_datetime_text,
     fetch_page_text,
     format_agent_log_markdown,
     format_evidence,
-    search_web,
+    has_agent_evidence,
+    is_fresh_evidence,
+    mark_evidence_freshness,
+    search_duckduckgo,
+    search_news_rss,
     short_preview,
 )
 from market_signal_scanner.config_loader import ScannerConfig
@@ -30,7 +35,7 @@ ProgressCallback = Callable[[str, str], None]
 
 
 @dataclass
-class OracleResult:
+class TrendCatcherResult:
     output_dir: Path
     report_path: Path
     sources_path: Path
@@ -44,7 +49,7 @@ class OracleResult:
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
-class OracleState(TypedDict, total=False):
+class TrendCatcherState(TypedDict, total=False):
     config: ScannerConfig
     output_base: Path
     queries: list[str]
@@ -55,9 +60,10 @@ class OracleState(TypedDict, total=False):
     events: list[dict[str, Any]]
     llm_calls: list[dict[str, Any]]
     llm_error: str
+    generated_at: str
 
 
-class OracleRunner:
+class TrendCatcherRunner:
     def __init__(self, progress: ProgressCallback | None = None) -> None:
         self.external_progress = progress or (lambda _kind, _message: None)
         self.events: list[dict[str, Any]] = []
@@ -72,8 +78,8 @@ class OracleRunner:
         self.events.append(event)
         self.external_progress(kind, message)
 
-    def run(self, config: ScannerConfig, output_base: str | Path) -> OracleResult:
-        state: OracleState = {
+    def run(self, config: ScannerConfig, output_base: str | Path) -> TrendCatcherResult:
+        state: TrendCatcherState = {
             "config": config,
             "output_base": Path(output_base),
             "queries": [],
@@ -83,19 +89,20 @@ class OracleRunner:
             "events": self.events,
             "llm_calls": [],
             "llm_error": "",
+            "generated_at": current_datetime_text(),
         }
         final_state = self._run_graph(state)
         final_state["events"] = self.events
-        return write_oracle_outputs(final_state)
+        return write_trend_catcher_outputs(final_state)
 
-    def _run_graph(self, state: OracleState) -> OracleState:
+    def _run_graph(self, state: TrendCatcherState) -> TrendCatcherState:
         try:
             from langgraph.graph import END, StateGraph
         except Exception as exc:
-            LOGGER.warning("LangGraph unavailable; using sequential Oracle runner: %s", exc)
+            LOGGER.warning("LangGraph unavailable; using sequential Trend Catcher runner: %s", exc)
             return self._run_sequential(state)
 
-        graph = StateGraph(OracleState)
+        graph = StateGraph(TrendCatcherState)
         graph.add_node("plan", self.plan)
         graph.add_node("search", self.search)
         graph.add_node("read", self.read)
@@ -107,10 +114,10 @@ class OracleRunner:
         graph.add_conditional_edges("read", self.should_continue, {"continue": "search", "finish": "pulse"})
         graph.add_edge("pulse", "synthesize")
         graph.add_edge("synthesize", END)
-        self.progress("thought", "Built Oracle LangGraph workflow: plan -> search/read loop -> discovered-ticker pulse -> alert synthesis.")
+        self.progress("thought", "Built Trend Catcher LangGraph workflow: plan -> search/read loop -> discovered-ticker pulse -> alert synthesis.")
         return graph.compile().invoke(state)
 
-    def _run_sequential(self, state: OracleState) -> OracleState:
+    def _run_sequential(self, state: TrendCatcherState) -> TrendCatcherState:
         state = self.plan(state)
         while self.should_continue(state) == "continue":
             state = self.search(state)
@@ -119,7 +126,7 @@ class OracleRunner:
         state = self.synthesize(state)
         return state
 
-    def pulse(self, state: OracleState) -> OracleState:
+    def pulse(self, state: TrendCatcherState) -> TrendCatcherState:
         config = state["config"]
         if not config.oracle.pulse_enabled:
             self.progress("observation", "Market pulse disabled in config.")
@@ -129,7 +136,7 @@ class OracleRunner:
         config_tickers = config.tickers if config.oracle.pulse_include_config_tickers else []
         tickers = dedupe_tickers([*discovered_tickers, *baseline_tickers, *config_tickers])
         if not tickers:
-            self.progress("observation", "No tickers were discovered from Oracle evidence, so intraday pulse verification was skipped.")
+            self.progress("observation", "No tickers were discovered from Trend Catcher evidence, so intraday pulse verification was skipped.")
             return state
         self.progress(
             "action",
@@ -150,16 +157,16 @@ class OracleRunner:
             self.progress("observation", "Market pulse did not find notable intraday movers.")
         return state
 
-    def plan(self, state: OracleState) -> OracleState:
+    def plan(self, state: TrendCatcherState) -> TrendCatcherState:
         config = state["config"]
-        prompt = load_prompt("oracle_planner.md").format(
-            current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        prompt = render_trend_catcher_prompt(
+            "trend_catcher_planner.md",
             max_queries=config.oracle.max_search_queries,
         )
-        fallback = default_oracle_queries()
+        fallback = default_trend_catcher_queries()
         self.progress("thought", "Planning broad market disruption searches.")
         try:
-            response = call_logged_ollama(config.oracle, prompt, state, "oracle_planner")
+            response = call_logged_ollama(config.oracle, prompt, state, "trend_catcher_planner")
             parsed = json.loads(extract_json(response))
             queries = [str(item).strip() for item in parsed.get("queries", []) if str(item).strip()]
             state["queries"] = (queries or fallback)[: config.oracle.max_search_queries]
@@ -168,11 +175,11 @@ class OracleRunner:
         except Exception as exc:
             state["llm_error"] = str(exc)
             state["queries"] = fallback[: config.oracle.max_search_queries]
-            self.progress("observation", f"Oracle planner fallback used: {exc}", queries=state["queries"])
-        self.progress("action", f"Oracle planned {len(state['queries'])} searches.", queries=state["queries"])
+            self.progress("observation", f"Trend Catcher planner fallback used: {exc}", queries=state["queries"])
+        self.progress("action", f"Trend Catcher planned {len(state['queries'])} searches.", queries=state["queries"])
         return state
 
-    def search(self, state: OracleState) -> OracleState:
+    def search(self, state: TrendCatcherState) -> TrendCatcherState:
         config = state["config"]
         index = int(state.get("query_index", 0))
         queries = state.get("queries", [])
@@ -180,91 +187,171 @@ class OracleRunner:
             return state
         query = queries[index]
         self.progress("action", f"Scanning market news: {query}", query=query)
-        results, note = search_web(query, config.oracle.search_results_per_query, config.oracle.search_region)
+        results, note = search_recent_trend_catcher_sources(query, config)
+        for item in results:
+            mark_evidence_freshness(item, config.oracle.source_lookback_hours, config.oracle.require_source_dates)
         evidence = state.get("evidence", [])
         evidence.extend(results)
         state["evidence"] = dedupe_by_url(evidence)
         state["query_index"] = index + 1
         self.progress(
             "observation",
-            f"Oracle found {len(results)} source link(s). {note}",
+            f"Trend Catcher found {len(results)} source link(s). {note}",
             query=query,
             note=note,
             results=[item.__dict__ for item in results],
         )
         return state
 
-    def read(self, state: OracleState) -> OracleState:
+    def read(self, state: TrendCatcherState) -> TrendCatcherState:
         config = state["config"]
-        unread = [item for item in state.get("evidence", []) if not item.content][: config.oracle.pages_per_search]
+        unread = sorted(
+            [item for item in state.get("evidence", []) if not item.content],
+            key=lambda item: 0 if item.published_at else 1,
+        )[: config.oracle.pages_per_search]
         for item in unread:
             self.progress("action", f"Reading market source: {item.title[:90]}", title=item.title, url=item.url)
             fetched = fetch_page_text(item.url, config.oracle.max_page_chars)
             item.content = fetched.text
+            item.fetched_at = current_datetime_text()
+            if fetched.published_at and not item.published_at:
+                item.published_at = fetched.published_at
+            mark_evidence_freshness(item, config.oracle.source_lookback_hours, config.oracle.require_source_dates)
+            if not is_fresh_evidence(item, config.oracle.source_lookback_hours, config.oracle.require_source_dates):
+                self.progress(
+                    "observation",
+                    f"Ignoring source outside freshness window: {item.freshness_status}.",
+                    title=item.title,
+                    url=item.url,
+                    published_at=item.published_at,
+                    fetched_at=item.fetched_at,
+                    freshness_status=item.freshness_status,
+                )
+                continue
             if item.content:
                 self.progress("observation", f"Captured {len(item.content):,} characters ({fetched.reason}). Summarizing market impact.", title=item.title, url=item.url, fetch_result=fetched.__dict__)
-                item.summary = summarize_oracle_source(item, state)
+                item.summary = summarize_trend_catcher_source(item, state)
                 self.progress("observation", f"Market-impact summary ready: {short_preview(item.summary, 260)}", title=item.title, url=item.url, summary=item.summary)
             else:
                 self.progress("observation", f"Could not parse source: {fetched.reason}. Keeping snippet.", title=item.title, url=item.url, fetch_result=fetched.__dict__)
+        before_count = len(state.get("evidence", []))
+        state["evidence"] = filter_recent_trend_catcher_evidence(state.get("evidence", []), config)
+        removed_count = before_count - len(state["evidence"])
+        if removed_count:
+            self.progress(
+                "observation",
+                f"Ignored {removed_count} stale or undated source(s) outside the Trend Catcher freshness window.",
+                source_lookback_hours=config.oracle.source_lookback_hours,
+                require_source_dates=config.oracle.require_source_dates,
+            )
         return state
 
-    def should_continue(self, state: OracleState) -> str:
+    def should_continue(self, state: TrendCatcherState) -> str:
         config = state["config"]
         index = int(state.get("query_index", 0))
         if index >= min(len(state.get("queries", [])), config.oracle.max_iterations):
             return "finish"
         return "continue"
 
-    def synthesize(self, state: OracleState) -> OracleState:
+    def synthesize(self, state: TrendCatcherState) -> TrendCatcherState:
         config = state["config"]
-        prompt = load_prompt("oracle_synthesis.md").format(
-            current_date=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        if not has_agent_evidence(state.get("evidence", [])):
+            state["llm_error"] = "No external source evidence was fetched; skipped Trend Catcher LLM synthesis to avoid unsourced conclusions."
+            self.progress("observation", state["llm_error"])
+            state["report"] = insufficient_trend_catcher_report(state)
+            self.progress("observation", "Trend Catcher scan completed with insufficient source evidence.", report_chars=len(state.get("report", "")))
+            return state
+        prompt = render_trend_catcher_prompt(
+            "trend_catcher_synthesis.md",
             alert_threshold=config.oracle.alert_threshold,
+            source_lookback_hours=config.oracle.source_lookback_hours,
             market_pulse_text=format_market_pulse(state.get("market_pulse", [])),
             evidence_text=format_evidence(state.get("evidence", [])),
         )
-        self.progress("thought", "Synthesizing Oracle alert threshold decision.", evidence_count=len(state.get("evidence", [])))
+        self.progress("thought", "Synthesizing Trend Catcher alert threshold decision.", evidence_count=len(state.get("evidence", [])))
         try:
-            state["report"] = call_logged_ollama(config.oracle, prompt, state, "oracle_synthesis")
+            state["report"] = call_logged_ollama(config.oracle, prompt, state, "trend_catcher_synthesis")
         except Exception as exc:
             state["llm_error"] = str(exc)
-            state["report"] = fallback_oracle_report(state)
-            self.progress("observation", f"Oracle synthesis fallback used: {exc}", error=str(exc))
-        self.progress("observation", "Oracle scan completed.", report_chars=len(state.get("report", "")))
+            state["report"] = fallback_trend_catcher_report(state)
+            self.progress("observation", f"Trend Catcher synthesis fallback used: {exc}", error=str(exc))
+        self.progress("observation", "Trend Catcher scan completed.", report_chars=len(state.get("report", "")))
         return state
 
 
-def run_oracle(config: ScannerConfig, output_base: str | Path, progress: ProgressCallback | None = None) -> OracleResult:
-    return OracleRunner(progress=progress).run(config, output_base)
+def run_trend_catcher(config: ScannerConfig, output_base: str | Path, progress: ProgressCallback | None = None) -> TrendCatcherResult:
+    return TrendCatcherRunner(progress=progress).run(config, output_base)
 
 
-def summarize_oracle_source(item: AgentEvidence, state: OracleState) -> str:
+def render_trend_catcher_prompt(name: str, **values: Any) -> str:
+    values.setdefault("current_date", current_datetime_text())
+    return load_prompt(name).format(**values)
+
+
+def search_recent_trend_catcher_sources(query: str, config: ScannerConfig) -> tuple[list[AgentEvidence], str]:
+    recent_days = max(1, int((config.oracle.source_lookback_hours + 23) // 24))
+    rss_results = search_news_rss(query, config.oracle.search_results_per_query, recent_days=recent_days)
+    fresh_rss = [
+        item
+        for item in rss_results
+        if is_fresh_evidence(item, config.oracle.source_lookback_hours, require_source_date=True)
+    ]
+    notes = [f"Google News RSS returned {len(fresh_rss)} fresh timestamped link(s)."]
+
+    results = fresh_rss[: config.oracle.search_results_per_query]
+    if len(results) >= config.oracle.search_results_per_query:
+        return results, " ".join(notes)
+
+    duck_results, duck_error = search_duckduckgo(
+        query,
+        config.oracle.search_results_per_query - len(results),
+        config.oracle.search_region,
+    )
+    if duck_results:
+        notes.append(f"DuckDuckGo added {len(duck_results)} supplemental web link(s); these still need page-level timestamps.")
+        results.extend(duck_results)
+    elif duck_error:
+        notes.append(f"DuckDuckGo fallback failed: {duck_error}.")
+
+    return dedupe_by_url(results), " ".join(notes)
+
+
+def summarize_trend_catcher_source(item: AgentEvidence, state: TrendCatcherState) -> str:
     config = state["config"]
-    prompt = load_prompt("oracle_source_summary.md").format(title=item.title, url=item.url, page_text=item.content[: config.oracle.max_page_chars])
+    prompt = render_trend_catcher_prompt(
+        "trend_catcher_source_summary.md",
+        source_lookback_hours=config.oracle.source_lookback_hours,
+        title=item.title,
+        url=item.url,
+        published_at=item.published_at or "unknown",
+        fetched_at=item.fetched_at or "unknown",
+        freshness_status=item.freshness_status or "unknown",
+        page_text=item.content[: config.oracle.max_page_chars],
+    )
     try:
-        return call_logged_ollama(config.oracle, prompt, state, "oracle_source_summary")
+        return call_logged_ollama(config.oracle, prompt, state, "trend_catcher_source_summary")
     except Exception as exc:
-        LOGGER.warning("Oracle source summary failed for %s: %s", item.url, exc)
+        LOGGER.warning("Trend Catcher source summary failed for %s: %s", item.url, exc)
         return item.snippet or item.content[:900]
 
 
-def write_oracle_outputs(state: OracleState) -> OracleResult:
-    output_dir = Path(state["output_base"]) / "oracle" / datetime.now().strftime("%Y%m%d-%H%M%S")
+def write_trend_catcher_outputs(state: TrendCatcherState) -> TrendCatcherResult:
+    output_dir = Path(state["output_base"]) / "trend-catcher" / datetime.now().strftime("%Y%m%d-%H%M%S")
     output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = output_dir / "oracle_report.md"
-    sources_path = output_dir / "oracle_sources.csv"
-    pulse_path = output_dir / "oracle_market_pulse.csv"
-    context_path = output_dir / "oracle_context.json"
-    log_path = output_dir / "oracle_log.md"
-    log_json_path = output_dir / "oracle_log.json"
+    report_path = output_dir / "trend_catcher_report.md"
+    sources_path = output_dir / "trend_catcher_sources.csv"
+    pulse_path = output_dir / "trend_catcher_market_pulse.csv"
+    context_path = output_dir / "trend_catcher_context.json"
+    log_path = output_dir / "trend_catcher_log.md"
+    log_json_path = output_dir / "trend_catcher_log.json"
     evidence = state.get("evidence", [])
     report = state.get("report", "")
+    report = with_trend_catcher_timestamp(report, state)
     if state.get("llm_error"):
-        report += f"\n\n## Oracle Runtime Note\n\nLLM fallback/error: `{state['llm_error']}`\n"
+        report += f"\n\n## Trend Catcher Runtime Note\n\nLLM fallback/error: `{state['llm_error']}`\n"
     report_path.write_text(report, encoding="utf-8")
     with sources_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["title", "url", "query", "snippet", "summary", "source_type", "content"])
+        writer = csv.DictWriter(handle, fieldnames=["title", "url", "query", "snippet", "summary", "source_type", "published_at", "fetched_at", "freshness_status", "content"])
         writer.writeheader()
         for item in evidence:
             writer.writerow(item.__dict__)
@@ -287,7 +374,7 @@ def write_oracle_outputs(state: OracleState) -> OracleResult:
         for row in market_pulse:
             writer.writerow({key: row.get(key, "") for key in fieldnames})
     payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": current_datetime_text(),
         "report": report,
         "evidence": [item.__dict__ for item in evidence],
         "market_pulse": market_pulse,
@@ -296,16 +383,31 @@ def write_oracle_outputs(state: OracleState) -> OracleResult:
         "llm_error": state.get("llm_error", ""),
     }
     context_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    log_payload = {"query": "Oracle market disruption scan", "ticker": "ORACLE", "entity_name": "Market", "output_dir": str(output_dir), **payload}
+    log_payload = {"query": "Trend Catcher market disruption scan", "ticker": "TREND-CATCHER", "entity_name": "Market", "output_dir": str(output_dir), **payload}
     log_json_path.write_text(json.dumps(log_payload, indent=2, default=str), encoding="utf-8")
     log_path.write_text(format_agent_log_markdown(log_payload), encoding="utf-8")
-    return OracleResult(output_dir, report_path, sources_path, pulse_path, context_path, log_path, log_json_path, report, evidence, market_pulse, state.get("events", []))
+    return TrendCatcherResult(output_dir, report_path, sources_path, pulse_path, context_path, log_path, log_json_path, report, evidence, market_pulse, state.get("events", []))
 
 
-def append_oracle_log_event(output_dir: str | Path, event: dict[str, Any]) -> None:
+def with_trend_catcher_timestamp(report: str, state: TrendCatcherState) -> str:
+    generated_at = state.get("generated_at") or current_datetime_text()
+    source_window = state["config"].oracle.source_lookback_hours
+    lines = report.strip().splitlines()
+    stamp = [
+        "",
+        f"Generated: {generated_at}",
+        f"Freshness window: sources must be timestamped within the last {source_window} hours.",
+        "",
+    ]
+    if lines and lines[0].startswith("# "):
+        return "\n".join([lines[0], *stamp, *lines[1:]]).rstrip() + "\n"
+    return "\n".join(["# Trend Catcher Report", *stamp, report.strip()]).rstrip() + "\n"
+
+
+def append_trend_catcher_log_event(output_dir: str | Path, event: dict[str, Any]) -> None:
     output_path = Path(output_dir)
-    log_json_path = output_path / "oracle_log.json"
-    log_path = output_path / "oracle_log.md"
+    log_json_path = output_path / "trend_catcher_log.json"
+    log_path = output_path / "trend_catcher_log.md"
     if not log_json_path.exists():
         return
     payload = json.loads(log_json_path.read_text(encoding="utf-8"))
@@ -314,16 +416,16 @@ def append_oracle_log_event(output_dir: str | Path, event: dict[str, Any]) -> No
     log_path.write_text(format_agent_log_markdown(payload), encoding="utf-8")
 
 
-def default_oracle_queries() -> list[str]:
+def default_trend_catcher_queries() -> list[str]:
     return [
-        "breaking market movers today unusual volume surging plunging stocks crypto commodities",
-        "what is trending in markets right now stocks crypto commodities social media investors",
-        "premarket after hours biggest movers today catalyst news analyst upgrade downgrade earnings guidance",
-        "new market trend starting today sector rotation risk on risk off unusual investor attention",
+        "latest breaking market movers past 24 hours unusual volume surging plunging stocks crypto commodities",
+        "latest markets right now past 24 hours stocks crypto commodities investor attention",
+        "latest market movers today catalyst news most active stocks crypto commodities",
+        "latest sector rotation today risk on risk off unusual investor attention",
         "viral stock market narrative today retail traders institutional flows most active tickers",
-        "sudden market repricing today policy regulation legal ruling supply shock macro data",
-        "early buy signal market trend today breakout momentum unusual options volume",
-        "early sell warning market trend today breakdown risk warning credit stress liquidity shock",
+        "latest sudden market repricing today policy regulation legal ruling supply shock macro data",
+        "early buy signal today breakout momentum unusual options volume latest news",
+        "early sell warning today breakdown risk warning credit stress liquidity shock latest news",
     ]
 
 
@@ -348,7 +450,7 @@ def collect_market_pulse(config: ScannerConfig, tickers_override: list[str] | No
             progress=False,
         )
     except Exception as exc:
-        LOGGER.warning("Oracle market pulse download failed: %s", exc)
+        LOGGER.warning("Trend Catcher market pulse download failed: %s", exc)
         return []
     rows: list[dict[str, Any]] = []
     for ticker in tickers:
@@ -442,19 +544,19 @@ def format_market_pulse(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def discover_pulse_tickers(state: OracleState, progress: ProgressCallback | None = None) -> list[str]:
+def discover_pulse_tickers(state: TrendCatcherState, progress: ProgressCallback | None = None) -> list[str]:
     config = state["config"]
     evidence = state.get("evidence", [])
     if not evidence:
         return []
     evidence_text = format_evidence(evidence)[:12000]
-    prompt = load_prompt("oracle_ticker_extraction.md").format(evidence_text=evidence_text)
+    prompt = render_trend_catcher_prompt("trend_catcher_ticker_extraction.md", evidence_text=evidence_text)
     try:
-        response = call_logged_ollama(config.oracle, prompt, state, "oracle_ticker_extraction")
+        response = call_logged_ollama(config.oracle, prompt, state, "trend_catcher_ticker_extraction")
         parsed = json.loads(extract_json(response))
         tickers = normalize_discovered_tickers(parsed.get("tickers", []))
         if progress and tickers:
-            progress("observation", f"Oracle discovered {len(tickers)} ticker(s) from evidence for pulse verification: {', '.join(tickers)}")
+            progress("observation", f"Trend Catcher discovered {len(tickers)} ticker(s) from evidence for pulse verification: {', '.join(tickers)}")
         if parsed.get("reasoning") and progress:
             progress("thought", str(parsed["reasoning"]))
         return tickers[: config.oracle.pulse_max_rows]
@@ -522,6 +624,18 @@ def dedupe_by_url(items: list[AgentEvidence]) -> list[AgentEvidence]:
     return result
 
 
+def filter_recent_trend_catcher_evidence(items: list[AgentEvidence], config: ScannerConfig) -> list[AgentEvidence]:
+    fresh: list[AgentEvidence] = []
+    for item in items:
+        if is_fresh_evidence(
+            item,
+            max_age_hours=config.oracle.source_lookback_hours,
+            require_source_date=config.oracle.require_source_dates,
+        ):
+            fresh.append(item)
+    return fresh
+
+
 def extract_json(text: str) -> str:
     import re
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
@@ -530,12 +644,20 @@ def extract_json(text: str) -> str:
     return match.group(0)
 
 
-def fallback_oracle_report(state: OracleState) -> str:
+def fallback_trend_catcher_report(state: TrendCatcherState) -> str:
     evidence = state.get("evidence", [])
     lines = "\n".join(f"- [{i}] [{item.title}]({item.url})" for i, item in enumerate(evidence, 1)) or "- No sources captured."
-    return f"""# Oracle: Needs Manual Review
+    return f"""# Trend Catcher: Needs Manual Review
 
-Oracle could not complete LLM synthesis, so no high-confidence alert decision was produced.
+Trend Catcher could not complete LLM synthesis, so no high-confidence alert decision was produced.
+
+## Attention Verdict
+
+- **Action now:** Do not trade from this run; review the captured sources manually before acting.
+- **Trade posture:** No trade yet.
+- **Why now:** The scanner found possible source links but could not complete the synthesis step.
+- **Do not:** Do not treat this fallback as a buy or sell signal.
+- **Invalidation:** Re-run successfully with fresh source summaries and market pulse confirmation.
 
 ## What Was Checked
 
@@ -544,4 +666,40 @@ Oracle could not complete LLM synthesis, so no high-confidence alert decision wa
 ## Note
 
 Review the sources manually. This is analytical research, not financial advice.
+"""
+
+
+def insufficient_trend_catcher_report(state: TrendCatcherState) -> str:
+    evidence = state.get("evidence", [])
+    attempted = len(evidence)
+    source_note = (
+        f"{attempted} source link(s) survived the freshness filter but none had usable text or snippets."
+        if attempted
+        else "No fresh timestamped source links survived the configured freshness filter."
+    )
+    return f"""# Trend Catcher: Unable To Assess
+
+Trend Catcher did not fetch usable external market/news evidence, so it did **not** ask the local LLM to identify trends, catalysts, buy signals, or sell warnings.
+
+## What Was Checked
+
+- Broad market search flow was attempted.
+- {source_note}
+- Google News RSS is tried first for timestamped recent news; web search links are only supplemental unless page metadata proves they are fresh.
+
+## Attention Verdict
+
+No alert is produced from this run. This means **insufficient evidence**, not "nothing is happening."
+
+## What To Do Next
+
+- Check internet access and configured sources.
+- Re-run Trend Catcher when search/news access is available.
+- Use primary news, filings, exchange notices, and price/volume data directly if this was during a possible market-moving event.
+
+## Source Notes
+
+- No source links captured.
+
+This is analytical research, not financial advice.
 """

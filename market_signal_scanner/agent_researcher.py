@@ -7,7 +7,8 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -44,6 +45,9 @@ class AgentEvidence:
     content: str = ""
     summary: str = ""
     source_type: str = "duckduckgo"
+    published_at: str = ""
+    fetched_at: str = ""
+    freshness_status: str = "unknown"
 
 
 @dataclass
@@ -63,6 +67,7 @@ class PageFetchResult:
     reason: str = ""
     status_code: int | None = None
     content_type: str = ""
+    published_at: str = ""
 
 
 class AgentState(TypedDict, total=False):
@@ -275,7 +280,7 @@ class AgentRunner:
             query=state["query"],
             ticker=state.get("ticker") or "not provided",
             entity_name=state.get("entity_name") or state.get("ticker") or "unknown",
-            current_date=datetime.now().strftime("%Y-%m-%d"),
+            current_date=current_datetime_text(),
             max_queries=config.agent.max_search_queries,
         )
         self.progress("thought", "Asking the LLM to plan current-news searches.")
@@ -333,6 +338,10 @@ class AgentRunner:
             self.progress("action", f"Fetching source page: {item.title[:90]}", title=item.title, url=item.url)
             fetched = fetch_page_text(item.url, config.agent.max_page_chars)
             item.content = fetched.text
+            item.fetched_at = current_datetime_text()
+            if fetched.published_at and not item.published_at:
+                item.published_at = fetched.published_at
+            mark_evidence_freshness(item, max_age_hours=24 * 30, require_source_date=False)
             if item.content:
                 source_note = f" ({fetched.reason})" if fetched.reason else ""
                 self.progress(
@@ -360,12 +369,18 @@ class AgentRunner:
 
     def synthesize(self, state: AgentState) -> AgentState:
         config = state["config"]
+        if not has_agent_evidence(state.get("evidence", [])):
+            state["llm_error"] = "No external source evidence was fetched; skipped LLM synthesis to avoid unsourced conclusions."
+            self.progress("observation", state["llm_error"])
+            state["report"] = insufficient_agent_report(state)
+            self.progress("observation", "Agent research report completed with insufficient source evidence.", report_chars=len(state.get("report", "")))
+            return state
         evidence_text = format_evidence(state.get("evidence", []))
         prompt = load_prompt("agent_synthesis.md").format(
             query=state["query"],
             ticker=state.get("ticker") or "not provided",
             entity_name=state.get("entity_name") or state.get("ticker") or "unknown",
-            current_date=datetime.now().strftime("%Y-%m-%d"),
+            current_date=current_datetime_text(),
             signals_json=json.dumps(compact_signals(state.get("signals", {})), indent=2, default=str),
             fundamentals_json=json.dumps(compact_fundamentals(state.get("fundamentals", {})), indent=2, default=str),
             evidence_text=evidence_text,
@@ -393,12 +408,20 @@ def run_agent_research(
 
 
 def answer_followup(question: str, context: dict[str, Any], config: ScannerConfig) -> str:
+    evidence = [AgentEvidence(**item) for item in context.get("evidence", [])]
+    if not has_agent_evidence(evidence):
+        return (
+            "I do not have fetched external source evidence for this session, so I cannot answer that with a "
+            "source-grounded market view. Re-run the Agent when internet/search sources are available, or provide "
+            "specific source text to analyze. I will not use the local model's prior knowledge to invent an answer."
+        )
     prompt = load_prompt("agent_followup.md").format(
+        current_date=current_datetime_text(),
         query=context.get("query", ""),
         ticker=context.get("ticker", ""),
         entity_name=context.get("entity_name", ""),
         report=context.get("report", ""),
-        evidence_text=format_evidence([AgentEvidence(**item) for item in context.get("evidence", [])]),
+        evidence_text=format_evidence(evidence),
         chat_history=format_chat_history(context.get("chat", [])),
         question=question,
     )
@@ -464,8 +487,12 @@ def summarize_source(item: AgentEvidence, state: AgentState) -> str:
         query=state.get("query", ""),
         ticker=state.get("ticker", ""),
         entity_name=state.get("entity_name") or state.get("ticker") or "",
+        current_date=current_datetime_text(),
         title=item.title,
         url=item.url,
+        published_at=item.published_at or "unknown",
+        fetched_at=item.fetched_at or "unknown",
+        freshness_status=item.freshness_status or "unknown",
         page_text=item.content[: config.agent.max_page_chars],
     )
     try:
@@ -488,12 +515,12 @@ def default_search_queries(state: AgentState) -> list[str]:
     ]
 
 
-def search_web(query: str, limit: int, region: str, ticker: str = "") -> tuple[list[AgentEvidence], str]:
+def search_web(query: str, limit: int, region: str, ticker: str = "", recent_days: int | None = None) -> tuple[list[AgentEvidence], str]:
     duck_results, duck_error = search_duckduckgo(query, limit, region)
     if duck_results:
         return duck_results, "Source: DuckDuckGo HTML."
 
-    rss_results = search_news_rss(query, limit)
+    rss_results = search_news_rss(query, limit, recent_days=recent_days)
     if rss_results:
         note = "DuckDuckGo returned no usable links; used Google News RSS fallback."
         if duck_error:
@@ -535,8 +562,9 @@ def search_duckduckgo(query: str, limit: int, region: str) -> tuple[list[AgentEv
     return results, ""
 
 
-def search_news_rss(query: str, limit: int) -> list[AgentEvidence]:
-    url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
+def search_news_rss(query: str, limit: int, recent_days: int | None = None) -> list[AgentEvidence]:
+    search_query = f"{query} when:{recent_days}d" if recent_days else query
+    url = f"https://news.google.com/rss/search?q={quote_plus(search_query)}&hl=en-US&gl=US&ceid=US:en"
     try:
         response = requests.get(url, timeout=20, headers={"Accept": "application/rss+xml, application/xml, text/xml, */*", "User-Agent": HTTP_HEADERS["User-Agent"]})
         response.raise_for_status()
@@ -549,8 +577,9 @@ def search_news_rss(query: str, limit: int) -> list[AgentEvidence]:
         title = text_at(item, "title")
         link = text_at(item, "link")
         summary = clean_text(text_at(item, "description"))
+        published_at = normalize_datetime_text(text_at(item, "pubDate"))
         if title and link:
-            results.append(AgentEvidence(title=title, url=link, query=query, snippet=summary, source_type="google_news_rss"))
+            results.append(AgentEvidence(title=title, url=link, query=query, snippet=summary, source_type="google_news_rss", published_at=published_at))
     return results
 
 
@@ -570,8 +599,9 @@ def search_yfinance_news(ticker: str, limit: int) -> list[AgentEvidence]:
             else content.get("link") or item.get("link") or ""
         ).strip()
         summary = clean_text(str(content.get("summary") or content.get("description") or ""))
+        published_at = normalize_datetime_text(content.get("pubDate") or content.get("providerPublishTime") or item.get("providerPublishTime"))
         if title and url:
-            results.append(AgentEvidence(title=title, url=url, query=f"{ticker} yfinance news", snippet=summary, source_type="yfinance_news"))
+            results.append(AgentEvidence(title=title, url=url, query=f"{ticker} yfinance news", snippet=summary, source_type="yfinance_news", published_at=published_at))
     return results
 
 
@@ -582,6 +612,9 @@ def source_event_payload(item: AgentEvidence) -> dict[str, str]:
         "source_type": item.source_type,
         "query": item.query,
         "snippet": item.snippet,
+        "published_at": item.published_at,
+        "fetched_at": item.fetched_at,
+        "freshness_status": item.freshness_status,
     }
 
 
@@ -604,6 +637,7 @@ def fetch_page_text(url: str, max_chars: int) -> PageFetchResult:
         response = requests.get(url, timeout=15, headers=HTTP_HEADERS)
         content_type = response.headers.get("content-type", "")
         status_code = response.status_code
+        header_published_at = normalize_datetime_text(response.headers.get("last-modified", ""))
         if status_code in {401, 403, 429}:
             return PageFetchResult(reason=f"HTTP {status_code}; source likely blocked automated access", status_code=status_code, content_type=content_type)
         if status_code >= 400:
@@ -612,10 +646,11 @@ def fetch_page_text(url: str, max_chars: int) -> PageFetchResult:
             return PageFetchResult(reason="PDF content is not parsed by this lightweight reader", status_code=status_code, content_type=content_type)
         if "text/plain" in content_type.lower():
             text = clean_text(response.text)[:max_chars]
-            return PageFetchResult(text=text, reason="plain text", status_code=status_code, content_type=content_type)
+            return PageFetchResult(text=text, reason="plain text", status_code=status_code, content_type=content_type, published_at=header_published_at)
 
         visible_text = extract_visible_text_bs4(response.text)
         metadata_text = extract_metadata_text_bs4(response.text)
+        page_published_at = extract_published_at_bs4(response.text) or header_published_at
         extraction_method = "Beautiful Soup"
         if not visible_text and not metadata_text:
             parser = TextExtractor()
@@ -633,7 +668,7 @@ def fetch_page_text(url: str, max_chars: int) -> PageFetchResult:
         reason = f"{extraction_method} visible text"
         if metadata_text and len(visible_text) < 500:
             reason = f"{extraction_method} metadata/JSON-LD fallback plus visible text"
-        return PageFetchResult(text=combined[:max_chars], reason=reason, status_code=status_code, content_type=content_type)
+        return PageFetchResult(text=combined[:max_chars], reason=reason, status_code=status_code, content_type=content_type, published_at=page_published_at)
     except Exception as exc:
         LOGGER.debug("Could not fetch page %s: %s", url, exc)
         return PageFetchResult(reason=short_error(exc))
@@ -651,7 +686,7 @@ def write_agent_outputs(state: AgentState) -> AgentResult:
 
     evidence = state.get("evidence", [])
     with evidence_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["title", "url", "query", "snippet", "summary", "source_type", "content"])
+        writer = csv.DictWriter(handle, fieldnames=["title", "url", "query", "snippet", "summary", "source_type", "published_at", "fetched_at", "freshness_status", "content"])
         writer.writeheader()
         for item in evidence:
             writer.writerow({
@@ -661,10 +696,14 @@ def write_agent_outputs(state: AgentState) -> AgentResult:
                 "snippet": item.snippet,
                 "summary": item.summary,
                 "source_type": item.source_type,
+                "published_at": item.published_at,
+                "fetched_at": item.fetched_at,
+                "freshness_status": item.freshness_status,
                 "content": item.content,
             })
 
     report = state.get("report", "")
+    report = with_report_timestamp(report, "Agent Research", current_datetime_text())
     if state.get("llm_error"):
         report += f"\n\n## Agent Runtime Note\n\nLLM fallback/error: `{state['llm_error']}`\n"
     report_path.write_text(report, encoding="utf-8")
@@ -702,6 +741,14 @@ def write_agent_outputs(state: AgentState) -> AgentResult:
         log_json_path=log_json_path,
         events=state.get("events", []),
     )
+
+
+def with_report_timestamp(report: str, fallback_title: str, generated_at: str) -> str:
+    lines = report.strip().splitlines()
+    stamp = ["", f"Generated: {generated_at}", ""]
+    if lines and lines[0].startswith("# "):
+        return "\n".join([lines[0], *stamp, *lines[1:]]).rstrip() + "\n"
+    return "\n".join([f"# {fallback_title}", *stamp, report.strip()]).rstrip() + "\n"
 
 
 def write_agent_log_files(log_path: Path, log_json_path: Path, state: AgentState, output_dir: Path) -> None:
@@ -775,6 +822,9 @@ def format_agent_log_markdown(payload: dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"- URL: {item.get('url', '')}")
         lines.append(f"- Source type: {item.get('source_type', '')}")
+        lines.append(f"- Published: {item.get('published_at') or 'unknown'}")
+        lines.append(f"- Fetched: {item.get('fetched_at') or 'unknown'}")
+        lines.append(f"- Freshness: {item.get('freshness_status') or 'unknown'}")
         lines.append(f"- Search query: {item.get('query', '')}")
         if item.get("snippet"):
             lines.append(f"- Snippet: {item.get('snippet')}")
@@ -879,6 +929,57 @@ This is analytical research, not financial advice.
 """
 
 
+def has_agent_evidence(evidence: list[AgentEvidence]) -> bool:
+    return any(item.url and (item.summary or item.snippet or item.content or item.title) for item in evidence)
+
+
+def insufficient_agent_report(state: AgentState) -> str:
+    signals = compact_signals(state.get("signals", {}))
+    recommendation = signals.get("recommendation", "Unknown")
+    score = signals.get("score", "N/A")
+    return f"""# Agent Research: {state.get('ticker') or state.get('query')}
+
+## Bottom Line
+
+Insufficient external source evidence was fetched, so the Agent did **not** ask the local LLM to produce a buy/sell thesis.
+
+Local scanner context, if available, shows recommendation **{recommendation}** with score **{score}**, but this is not a source-grounded current-news conclusion.
+
+## Buy Case
+
+- Not provided. No fetched sources support a current buy thesis.
+
+## Sell / Avoid Case
+
+- Not provided. No fetched sources support a current sell or avoid thesis.
+
+## Short-Term Outlook
+
+Unknown from this run. The app will not infer breaking catalysts, sentiment, or global-event effects from the local model's prior knowledge.
+
+## Long-Term Outlook
+
+Unknown from this run. Long-term analysis requires fetched filings, current reporting, or user-provided source material.
+
+## Scenario Map
+
+- Bull: Not assessed due to missing source evidence.
+- Base: Not assessed due to missing source evidence.
+- Bear: Not assessed due to missing source evidence.
+
+## What Would Change The View
+
+- Re-run after internet/search access is available.
+- Provide specific filings, articles, transcripts, or other source text for the Agent to analyze.
+
+## Source Notes
+
+- No usable external source evidence was captured.
+
+This is analytical research, not financial advice.
+"""
+
+
 def format_evidence(evidence: list[AgentEvidence]) -> str:
     if not evidence:
         return "No evidence gathered."
@@ -886,7 +987,7 @@ def format_evidence(evidence: list[AgentEvidence]) -> str:
     for index, item in enumerate(evidence, start=1):
         text = item.summary or item.snippet or extractive_source_summary(item.content)
         blocks.append(
-            f"[{index}] {item.title}\nURL: {item.url}\nSource type: {item.source_type}\nSearch query: {item.query}\nEvidence summary:\n{text[:1800]}"
+            f"[{index}] {item.title}\nURL: {item.url}\nSource type: {item.source_type}\nPublished: {item.published_at or 'unknown'}\nFetched: {item.fetched_at or 'unknown'}\nFreshness: {item.freshness_status or 'unknown'}\nSearch query: {item.query}\nEvidence summary:\n{text[:1800]}"
         )
     return "\n\n".join(blocks)
 
@@ -970,6 +1071,57 @@ def extract_metadata_text_bs4(html: str) -> str:
     return clean_text(" ".join(parts))
 
 
+def extract_published_at_bs4(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    selectors = (
+        {"property": "article:published_time"},
+        {"property": "article:modified_time"},
+        {"name": "date"},
+        {"name": "pubdate"},
+        {"name": "publishdate"},
+        {"name": "timestamp"},
+        {"itemprop": "datePublished"},
+        {"itemprop": "dateModified"},
+    )
+    for selector in selectors:
+        tag = soup.find("meta", attrs=selector)
+        if tag and tag.get("content"):
+            parsed = normalize_datetime_text(str(tag["content"]))
+            if parsed:
+                return parsed
+    time_tag = soup.find("time")
+    if time_tag:
+        parsed = normalize_datetime_text(str(time_tag.get("datetime") or time_tag.get_text(" ", strip=True)))
+        if parsed:
+            return parsed
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"})[:6]:
+        raw = script.string or script.get_text(" ", strip=True)
+        parsed = extract_published_at_json_ld(raw)
+        if parsed:
+            return parsed
+    return ""
+
+
+def extract_published_at_json_ld(raw: str) -> str:
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return ""
+    items = data if isinstance(data, list) else [data]
+    queue = list(items)
+    while queue:
+        item = queue.pop(0)
+        if isinstance(item, dict):
+            for key in ("datePublished", "dateModified", "uploadDate"):
+                parsed = normalize_datetime_text(item.get(key))
+                if parsed:
+                    return parsed
+            queue.extend(value for value in item.values() if isinstance(value, (dict, list)))
+        elif isinstance(item, list):
+            queue.extend(item)
+    return ""
+
+
 def extract_metadata_text(html: str) -> str:
     parser = MetadataExtractor()
     try:
@@ -1036,3 +1188,79 @@ def text_at(item: ET.Element, tag: str) -> str:
 def short_error(exc: Exception) -> str:
     text = str(exc)
     return text if len(text) <= 220 else text[:217] + "..."
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def current_datetime_text() -> str:
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z%z")
+
+
+def normalize_datetime_text(value: Any) -> str:
+    parsed = parse_source_datetime(value)
+    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds") if parsed else ""
+
+
+def parse_source_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except Exception:
+            return None
+    text = clean_text(str(value))
+    if not text:
+        return None
+    try:
+        parsed = parsedate_to_datetime(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    relative = parse_relative_datetime(text)
+    return relative
+
+
+def parse_relative_datetime(text: str) -> datetime | None:
+    match = re.search(r"\b(\d+)\s+(minute|minutes|hour|hours|day|days|week|weeks)\s+ago\b", text, flags=re.I)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2).lower()
+    if unit.startswith("minute"):
+        delta = timedelta(minutes=amount)
+    elif unit.startswith("hour"):
+        delta = timedelta(hours=amount)
+    elif unit.startswith("day"):
+        delta = timedelta(days=amount)
+    else:
+        delta = timedelta(weeks=amount)
+    return now_utc() - delta
+
+
+def mark_evidence_freshness(item: AgentEvidence, max_age_hours: int, require_source_date: bool = False) -> AgentEvidence:
+    item.fetched_at = item.fetched_at or current_datetime_text()
+    published = parse_source_datetime(item.published_at)
+    if not published:
+        item.freshness_status = "undated_rejected" if require_source_date else "undated"
+        return item
+    age_hours = (now_utc() - published.astimezone(timezone.utc)).total_seconds() / 3600
+    if age_hours < -2:
+        item.freshness_status = "future_timestamp_rejected"
+    elif age_hours <= max_age_hours:
+        item.freshness_status = f"fresh_{age_hours:.1f}h_old"
+    else:
+        item.freshness_status = f"stale_{age_hours:.1f}h_old"
+    return item
+
+
+def is_fresh_evidence(item: AgentEvidence, max_age_hours: int, require_source_date: bool = False) -> bool:
+    mark_evidence_freshness(item, max_age_hours=max_age_hours, require_source_date=require_source_date)
+    return item.freshness_status.startswith("fresh_") or (item.freshness_status == "undated" and not require_source_date)

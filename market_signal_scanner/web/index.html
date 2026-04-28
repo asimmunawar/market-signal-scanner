@@ -6,7 +6,7 @@
   <title>market-signal-scanner</title>
   <link rel="icon" type="image/png" href="/static/assets/app-icon-small.png" />
   <link rel="apple-touch-icon" href="/static/assets/app-icon.png" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260427-light-report-blocks" />
 </head>
 <body>
   <div class="app-shell">
@@ -19,11 +19,12 @@
         </div>
       </div>
       <nav class="nav">
-        <button class="nav-button active" data-tab="run">Run</button>
+        <button class="nav-button active" data-tab="home">Home</button>
+        <button class="nav-button" data-tab="run">Scanner</button>
         <button class="nav-button" data-tab="chart">Chart</button>
         <button class="nav-button" data-tab="news">News Summary</button>
         <button class="nav-button" data-tab="agent">Agent</button>
-        <button class="nav-button" data-tab="oracle">Oracle</button>
+        <button class="nav-button" data-tab="trend-catcher">Trend Catcher</button>
         <button class="nav-button" data-tab="llm">LLM</button>
         <button class="nav-button" data-tab="outputs">Outputs</button>
         <button class="nav-button" data-tab="config">Config</button>
@@ -36,23 +37,84 @@
     </aside>
 
     <main class="content">
-      <section id="tab-run" class="tab active">
+      <section id="tab-home" class="tab active">
+        <section class="home-hero">
+          <div class="home-copy">
+            <div class="home-kicker">Local-first market intelligence</div>
+            <h2>market-signal-scanner</h2>
+            <p class="home-lede">Scan tickers, backtest signal ideas, chart technical setups, and research fresh market narratives from one calm workspace.</p>
+            <div class="home-actions">
+              <button class="primary" type="button" data-go-tab="run">Start a Scan</button>
+              <button class="ghost" type="button" data-go-tab="trend-catcher">Open Trend Catcher</button>
+              <a class="ghost link-button" href="https://github.com/asimmunawar/market-signal-scanner" target="_blank" rel="noopener noreferrer">GitHub</a>
+            </div>
+          </div>
+          <div class="home-mark-wrap">
+            <img class="home-mark" src="/static/assets/app-icon.png" alt="market-signal-scanner icon" />
+            <div class="home-signal-strip">
+              <span>Signals</span>
+              <span>Backtests</span>
+              <span>Charts</span>
+              <span>Research</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="home-grid">
+          <section class="home-card">
+            <h3>Scanner</h3>
+            <p>Rank your configured universe with trend, momentum, risk, valuation, and quality signals.</p>
+            <button class="home-card-link" type="button" data-go-tab="run">Open Run</button>
+          </section>
+          <section class="home-card">
+            <h3>Trend Catcher</h3>
+            <p>Look for broad-market disruptions and early attention shifts without starting from a ticker bias.</p>
+            <button class="home-card-link" type="button" data-go-tab="trend-catcher">Open Trend Catcher</button>
+          </section>
+          <section class="home-card">
+            <h3>Market Agent</h3>
+            <p>Ask source-grounded market questions and keep the research trail visible as it works.</p>
+            <button class="home-card-link" type="button" data-go-tab="agent">Open Agent</button>
+          </section>
+          <section class="home-card">
+            <h3>Charts</h3>
+            <p>Generate marked-up candle charts with moving averages, levels, trendlines, RSI, MACD, and volume.</p>
+            <button class="home-card-link" type="button" data-go-tab="chart">Open Charts</button>
+          </section>
+        </div>
+
+        <section class="home-contribute">
+          <div>
+            <h3>Contribute</h3>
+            <p>Ideas, bug reports, signal improvements, docs, and pull requests are welcome. Open an issue on GitHub to discuss changes or share a use case.</p>
+          </div>
+          <a class="ghost link-button" href="https://github.com/asimmunawar/market-signal-scanner" target="_blank" rel="noopener noreferrer">Contribute on GitHub</a>
+        </section>
+
+        <section class="home-note">
+          <strong>Built for analysis, not certainty.</strong>
+          <span>Reports are signal-driven research aids and not financial advice. When sources cannot be fetched, the app now avoids unsourced LLM conclusions.</span>
+        </section>
+      </section>
+
+      <section id="tab-run" class="tab">
         <div class="page-head">
           <div>
-            <h2>Run Scanner</h2>
+            <h2>Scanner</h2>
             <p>Launch current scans or historical backtests from the same config file.</p>
           </div>
         </div>
         <div class="grid two">
           <section class="panel">
             <h3>Current Scan</h3>
+            <p class="compact">Runs the scanner on the tickers and groups in <code>config/config.yaml</code>, computes current signals, ranks assets, and writes buy/sell candidate reports.</p>
             <label class="check-row"><input id="scanSkipFundamentals" type="checkbox" /> Skip fundamentals</label>
             <button id="runScan" class="primary">Run Scan</button>
             <p class="hint">Writes to <code>output/scans/&lt;timestamp&gt;/</code>.</p>
           </section>
           <section class="panel">
             <h3>Backtest</h3>
-            <p class="compact">Uses the <code>backtest</code> section in <code>config/config.yaml</code>.</p>
+            <p class="compact">Replays the scoring rules over historical data using the <code>backtest</code> section in <code>config/config.yaml</code>, then summarizes simulated performance, trades, costs, and benchmark comparison.</p>
             <button id="runBacktest" class="primary">Run Backtest</button>
             <p class="hint">Writes to <code>output/backtests/&lt;timestamp&gt;/</code>.</p>
           </section>
@@ -64,6 +126,7 @@
           </div>
           <div id="runProgress" class="job-card muted">No scan or backtest started yet.</div>
         </section>
+        <section id="runReportPreview" class="panel preview empty">Run a scan or backtest to preview the Markdown report here.</section>
       </section>
 
       <section id="tab-chart" class="tab">
@@ -141,31 +204,31 @@
         <div id="agentStatus" class="status-line"></div>
       </section>
 
-      <section id="tab-oracle" class="tab">
+      <section id="tab-trend-catcher" class="tab">
         <div class="page-head">
           <div>
-            <h2>Oracle</h2>
+            <h2>Trend Catcher</h2>
             <p>Scan broad markets for major disruptions, sudden trend shifts, and high-attention opportunities.</p>
           </div>
         </div>
         <section class="panel">
-          <button id="runOracle" class="primary" type="button">Run Oracle</button>
-          <div id="oracleStatus" class="status-line"></div>
-          <p class="hint">Writes to <code>output/oracle/&lt;timestamp&gt;/</code>. Oracle is designed for quick 10-15 minute market checks and should only alert when attention is warranted.</p>
+          <button id="runTrendCatcher" class="primary" type="button">Run Trend Catcher</button>
+          <div id="trendCatcherStatus" class="status-line"></div>
+          <p class="hint">Writes to <code>output/trend-catcher/&lt;timestamp&gt;/</code>. Trend Catcher is designed for quick 10-15 minute market checks and should only alert when attention is warranted.</p>
         </section>
         <section class="panel agent-phone-panel">
           <div class="agent-phone">
             <div class="agent-phone-head">
               <div>
-                <h3>Oracle Chat</h3>
+                <h3>Trend Catcher Chat</h3>
                 <p>Live broad-market scan progress</p>
               </div>
-              <span id="oracleSessionBadge" class="badge queued">idle</span>
+              <span id="trendCatcherSessionBadge" class="badge queued">idle</span>
             </div>
-            <div id="oracleConversation" class="agent-conversation empty">No Oracle run started yet.</div>
+            <div id="trendCatcherConversation" class="agent-conversation empty">No Trend Catcher run started yet.</div>
           </div>
         </section>
-        <section id="oracleReport" class="panel preview empty">No Oracle report generated in this session yet.</section>
+        <section id="trendCatcherReport" class="panel preview empty">No Trend Catcher report generated in this session yet.</section>
       </section>
 
       <section id="tab-llm" class="tab">
@@ -212,7 +275,7 @@
           <section class="panel"><div class="panel-title-row"><h3>Charts</h3><button class="trash-button" data-delete-kind="charts" title="Delete all chart runs">&#128465;</button></div><div id="chartRuns" class="run-list"></div></section>
           <section class="panel"><div class="panel-title-row"><h3>News</h3><button class="trash-button" data-delete-kind="news" title="Delete all news runs">&#128465;</button></div><div id="newsRuns" class="run-list"></div></section>
           <section class="panel"><div class="panel-title-row"><h3>Agents</h3><button class="trash-button" data-delete-kind="agents" title="Delete all agent runs">&#128465;</button></div><div id="agentRuns" class="run-list"></div></section>
-          <section class="panel"><div class="panel-title-row"><h3>Oracle</h3><button class="trash-button" data-delete-kind="oracle" title="Delete all Oracle runs">&#128465;</button></div><div id="oracleRuns" class="run-list"></div></section>
+          <section class="panel"><div class="panel-title-row"><h3>Trend Catcher</h3><button class="trash-button" data-delete-kind="trend-catcher" title="Delete all Trend Catcher runs">&#128465;</button></div><div id="trendCatcherRuns" class="run-list"></div></section>
         </div>
         <section class="panel viewer-panel">
           <div class="panel-title-row"><h3>Preview</h3><a id="downloadLink" class="download" href="#" target="_blank">Open file</a></div>
@@ -236,7 +299,7 @@
         <div class="page-head">
           <div>
             <h2>Activity</h2>
-            <p>Running and recent scans, charts, backtests, news summaries, Agent sessions, and Oracle sessions.</p>
+            <p>Running and recent scans, charts, backtests, news summaries, Agent sessions, and Trend Catcher sessions.</p>
           </div>
           <button id="refreshActivityPage" class="ghost">Refresh</button>
         </div>
@@ -245,6 +308,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260427-agent-input-cleanup"></script>
+  <script src="/static/app.js?v=20260427-trend-catcher-chat"></script>
 </body>
 </html>

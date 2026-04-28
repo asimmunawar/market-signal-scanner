@@ -212,7 +212,9 @@ news_summary:
 
   # Ollama model name. Pull/start this model locally before using the LLM path:
   # ollama pull gpt-oss:20b
-  model: "gpt-oss:20b"
+  # model: "gpt-oss:2"
+  # ollama pull qwen3:14b
+  model: "qwen3:14b"
 
   # Local Ollama server URL.
   base_url: "http://127.0.0.1:11434"
@@ -256,7 +258,7 @@ agent:
   search_region: "us-en"
   include_market_data: true
 
-# Broad-market disruption scanner for the GUI Oracle tab.
+# Broad-market disruption scanner for the GUI Trend Catcher tab.
 # Intended for quick 10-15 minute checks. Higher alert_threshold = fewer alerts.
 oracle:
   provider: "ollama"
@@ -271,8 +273,11 @@ oracle:
   max_page_chars: 7000
   search_region: "us-en"
   alert_threshold: 70
+  # Trend Catcher only uses timestamped sources inside this recent window for alert decisions.
+  source_lookback_hours: 48
+  require_source_dates: true
   pulse_enabled: true
-  # Keep false for unbiased Oracle discovery. When false, pulse verifies tickers found in news first.
+  # Keep false for unbiased Trend Catcher discovery. When false, pulse verifies tickers found in news first.
   pulse_use_baseline_tickers: false
   pulse_include_config_tickers: false
   pulse_tickers:

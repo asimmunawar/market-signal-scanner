@@ -304,6 +304,8 @@ def build_chart_report(options: ChartOptions, signals: dict[str, Any], levels: l
     lines = [
         f"# {options.ticker} Chart Report",
         "",
+        f"Generated: {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z%z')}",
+        "",
         "This chart is an analytical view of historical price action. It is not financial advice.",
         "",
         "## Snapshot",

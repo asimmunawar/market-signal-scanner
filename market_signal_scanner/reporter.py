@@ -23,7 +23,8 @@ def write_outputs(scored: pd.DataFrame, output_dir: str | Path) -> Path:
 
 def build_report(scored: pd.DataFrame) -> str:
     if scored.empty:
-        return "# Portfolio Scanner Report\n\nNo valid ticker data was available.\n\nThis is not financial advice.\n"
+        generated = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z%z")
+        return f"# Portfolio Scanner Report\n\nGenerated: {generated}\n\nNo valid ticker data was available.\n\nThis is not financial advice.\n"
 
     buys = scored[scored["recommendation"].isin(["Strong Buy", "Buy"])].head(20)
     sells = scored[scored["recommendation"].isin(["Strong Sell", "Sell"])].sort_values("score").head(20)
@@ -31,6 +32,8 @@ def build_report(scored: pd.DataFrame) -> str:
 
     lines = [
         "# Portfolio Scanner Report",
+        "",
+        f"Generated: {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z%z')}",
         "",
         "This report provides analytical market signals only. It is not financial advice, and it does not guarantee future returns.",
         "",

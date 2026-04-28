@@ -50,6 +50,10 @@ List specific developments that would strengthen or weaken the thesis.
 Summarize which sources were most important and note any gaps, stale data, or uncertainty.
 
 Rules:
+- If the search evidence says no evidence was gathered, do not produce a buy/sell thesis, catalyst narrative, scenario map, or prediction. Write an insufficient-evidence report instead.
+- Use only the supplied evidence, technical signals, and fundamental snapshot. Do not use prior model knowledge or memory.
+- Treat the Current date above as authoritative. Do not infer current events from model memory.
+- Prefer fresh, timestamped sources; clearly down-rank stale or undated sources.
 - Never fabricate facts, source details, price targets, analyst ratings, earnings numbers, geopolitical claims, or certainty.
 - If a global event could affect the stock, explain the causal chain and mark it as a scenario unless the evidence directly supports it.
 - Separate evidence from judgment.

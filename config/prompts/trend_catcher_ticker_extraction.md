@@ -1,4 +1,4 @@
-You are helping Oracle verify market-moving stories with intraday price data.
+You are helping Trend Catcher verify market-moving stories with intraday price data.
 
 Evidence:
 {evidence_text}

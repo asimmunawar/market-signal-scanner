@@ -15,7 +15,7 @@ from market_signal_scanner.config_loader import load_config, resolve_ticker_univ
 from market_signal_scanner.data_fetcher import Cache, fetch_fundamentals, fetch_price_history
 from market_signal_scanner.indicators import compute_signals
 from market_signal_scanner.news_summary import run_news_summary
-from market_signal_scanner.oracle import run_oracle
+from market_signal_scanner.trend_catcher import run_trend_catcher
 from market_signal_scanner.reporter import write_outputs
 from market_signal_scanner.scorer import score_universe
 
@@ -25,7 +25,7 @@ LOGGER = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan markets and backtest scanner rules.")
-    parser.add_argument("command", nargs="?", choices=["scan", "backtest", "chart", "news", "agent", "oracle"], default="scan", help="Run a current scan, historical backtest, ticker chart, news summary, research agent, or Oracle market scan.")
+    parser.add_argument("command", nargs="?", choices=["scan", "backtest", "chart", "news", "agent", "trend-catcher", "oracle"], default="scan", help="Run a current scan, historical backtest, ticker chart, news summary, research agent, or Trend Catcher market scan.")
     parser.add_argument("--config", default="config/config.yaml", help="Path to YAML configuration file.")
     parser.add_argument("--output", default="./output", help="Base output directory.")
     parser.add_argument("--skip-fundamentals", action="store_true", help="Skip fundamentals for this run.")
@@ -62,8 +62,8 @@ def main() -> int:
         return run_news_command(config, args)
     if args.command == "agent":
         return run_agent_command(config, args)
-    if args.command == "oracle":
-        return run_oracle_command(config, args)
+    if args.command in {"trend-catcher", "oracle"}:
+        return run_trend_catcher_command(config, args)
     return run_scan_command(config, args)
 
 
@@ -214,12 +214,12 @@ def run_agent_command(config, args: argparse.Namespace) -> int:
     return 0
 
 
-def run_oracle_command(config, args: argparse.Namespace) -> int:
+def run_trend_catcher_command(config, args: argparse.Namespace) -> int:
     def progress(kind: str, message: str) -> None:
-        LOGGER.info("oracle %s: %s", kind, message)
+        LOGGER.info("trend-catcher %s: %s", kind, message)
 
-    result = run_oracle(config, args.output, progress=progress)
-    LOGGER.info("Wrote Oracle outputs to %s", result.output_dir.resolve())
+    result = run_trend_catcher(config, args.output, progress=progress)
+    LOGGER.info("Wrote Trend Catcher outputs to %s", result.output_dir.resolve())
     LOGGER.info("Report: %s", result.report_path.resolve())
     LOGGER.info("Sources: %s", result.sources_path.resolve())
     LOGGER.info("Log: %s", result.log_path.resolve())

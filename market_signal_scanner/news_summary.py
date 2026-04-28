@@ -8,6 +8,7 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote_plus
@@ -133,7 +134,7 @@ def collect_news(state: NewsSummaryState) -> NewsSummaryState:
         sources.extend(fetch_yahoo_rss(state.ticker, state.config.news_summary.max_news_items))
     if enabled.get("google_news", True):
         sources.extend(fetch_google_news_rss(state.ticker, state.entity_name, state.config.news_summary))
-    state.sources = dedupe_sources(sources)[: state.config.news_summary.max_news_items]
+    state.sources = dedupe_sources(sources, state.config.news_summary.news_lookback_days)[: state.config.news_summary.max_news_items]
     return state
 
 
@@ -193,6 +194,10 @@ def fetch_rss(url: str, source_type: str, limit: int) -> list[ResearchSource]:
 
 
 def run_llm_analysis(state: NewsSummaryState) -> NewsSummaryState:
+    if not has_news_sources(state.sources):
+        state.llm_error = "No external news sources were fetched; skipped LLM analysis to avoid unsourced conclusions."
+        state.llm_report = insufficient_news_report(state)
+        return state
     prompt = build_prompt(state)
     if state.config.news_summary.provider != "ollama":
         state.llm_error = f"Unsupported provider configured: {state.config.news_summary.provider}"
@@ -205,6 +210,54 @@ def run_llm_analysis(state: NewsSummaryState) -> NewsSummaryState:
         state.llm_error = str(exc)
         state.llm_report = fallback_analysis(state)
     return state
+
+
+def has_news_sources(sources: list[ResearchSource]) -> bool:
+    return any(source.url and (source.title or source.summary) for source in sources)
+
+
+def insufficient_news_report(state: NewsSummaryState) -> str:
+    signals = compact_signals(state.price_signals)
+    score = signals.get("score", "N/A")
+    recommendation = signals.get("recommendation", "Unknown")
+    return f"""## Verdict
+
+No source-grounded news verdict is available for **{state.ticker}** because the configured news feeds returned no usable external sources.
+
+The local scanner data, if available, shows recommendation **{recommendation}** with score **{score}**, but this is not a current-news buy/sell thesis.
+
+## Buy Case
+
+- Not provided. The app did not fetch enough external source evidence to support a current buy case.
+
+## Sell / Avoid Case
+
+- Not provided. The app did not fetch enough external source evidence to support a current sell or avoid case.
+
+## Short-Term Outlook
+
+Insufficient source evidence. The app will not infer short-term catalysts from the local model's prior knowledge.
+
+## Long-Term Outlook
+
+Insufficient source evidence. Long-term claims require fetched filings, news, or other cited sources.
+
+## Catalysts To Watch
+
+- Re-run when internet access or configured feeds are available.
+- Check primary filings, earnings releases, exchange notices, and reputable financial news directly.
+
+## Key Risks
+
+- Internet access, RSS feeds, or yfinance news may be unavailable or rate-limited.
+- A local LLM can contain stale prior knowledge, so it was deliberately not used for unsourced analysis.
+
+## Source Notes
+
+- No source links captured.
+
+This is analytical research, not financial advice.
+"""
 
 
 def call_ollama(news_config: NewsSummaryConfig, prompt: str) -> str:
@@ -237,6 +290,7 @@ def build_prompt(state: NewsSummaryState) -> str:
     return load_prompt("news_summary.md").format(
         ticker=state.ticker,
         entity_name=state.entity_name or state.ticker,
+        current_date=datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z%z"),
         signals_json=json.dumps(signals, indent=2, default=str),
         fundamentals_json=json.dumps(fundamentals, indent=2, default=str),
         sources_text=sources,
@@ -383,7 +437,7 @@ def build_full_report(state: NewsSummaryState) -> str:
     llm_status = "completed" if not state.llm_error else f"fallback used: {state.llm_error}"
     return f"""# News Summary: {state.ticker}
 
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Generated: {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z%z')}
 
 Entity: {state.entity_name or state.ticker}
 
@@ -416,10 +470,10 @@ def format_bullets(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
-def dedupe_sources(sources: list[ResearchSource]) -> list[ResearchSource]:
+def dedupe_sources(sources: list[ResearchSource], lookback_days: int) -> list[ResearchSource]:
     deduped: list[ResearchSource] = []
     seen: set[str] = set()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=365)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     for source in sources:
         key = normalize_url(source.url) or source.title.lower()
         if not key or key in seen:
@@ -453,6 +507,11 @@ def parse_yfinance_time(value: Any) -> str:
 
 
 def parse_datetime(value: str) -> datetime | None:
+    try:
+        parsed = parsedate_to_datetime(value)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        pass
     for fmt in ("%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S %z"):
         try:
             parsed = datetime.strptime(value, fmt)

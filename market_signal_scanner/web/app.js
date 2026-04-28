@@ -1,10 +1,11 @@
 const state = {
+  currentTab: 'home',
   currentJobId: null,
   pollTimer: null,
   agentSessionId: null,
   agentPollTimer: null,
-  oracleSessionId: null,
-  oraclePollTimer: null,
+  trendCatcherSessionId: null,
+  trendCatcherPollTimer: null,
   activityPollTimer: null,
   runs: null,
 };
@@ -25,14 +26,55 @@ window.addEventListener('unhandledrejection', (event) => {
 function initTabs() {
   document.querySelectorAll('.nav-button').forEach((button) => {
     button.addEventListener('click', () => {
-      document.querySelectorAll('.nav-button').forEach((item) => item.classList.remove('active'));
-      document.querySelectorAll('.tab').forEach((item) => item.classList.remove('active'));
-      button.classList.add('active');
-      $(`tab-${button.dataset.tab}`).classList.add('active');
-      if (button.dataset.tab === 'outputs') loadRuns();
-      if (button.dataset.tab === 'activity') loadActivity();
-      if (button.dataset.tab === 'config') loadConfig();
-      if (button.dataset.tab === 'llm') loadLlmStatus();
+      activateTab(button.dataset.tab, { updateLocation: true });
+    });
+  });
+  window.addEventListener('hashchange', () => {
+    activateTab(tabFromLocation(), { updateLocation: false });
+  });
+  activateTab(tabFromLocation(), { updateLocation: false });
+}
+
+function tabFromLocation() {
+  const hashTab = window.location.hash.replace(/^#/, '').trim();
+  if (isKnownTab(hashTab)) return hashTab;
+  return 'home';
+}
+
+function isKnownTab(tab) {
+  return Boolean(tab && $(`tab-${tab}`) && document.querySelector(`.nav-button[data-tab="${tab}"]`));
+}
+
+function activateTab(tab, options = {}) {
+  const selected = isKnownTab(tab) ? tab : 'run';
+  state.currentTab = selected;
+  document.querySelectorAll('.nav-button').forEach((item) => {
+    item.classList.toggle('active', item.dataset.tab === selected);
+  });
+  document.querySelectorAll('.tab').forEach((item) => {
+    item.classList.toggle('active', item.id === `tab-${selected}`);
+  });
+  localStorage.setItem('marketSignalScanner.activeTab', selected);
+  if (options.updateLocation && window.location.hash !== `#${selected}`) {
+    history.replaceState(null, '', `#${selected}`);
+  }
+  loadTabData(selected);
+}
+
+function loadTabData(tab) {
+  if (tab === 'run') loadRunProgress();
+  if (tab === 'outputs') loadRuns();
+  if (tab === 'activity') loadActivity();
+  if (tab === 'config') loadConfig();
+  if (tab === 'llm') loadLlmStatus();
+  if (tab === 'agent') restoreAgentSession();
+  if (tab === 'trend-catcher') restoreTrendCatcherSession();
+}
+
+function wireTabLinks() {
+  document.querySelectorAll('[data-go-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      activateTab(button.dataset.goTab, { updateLocation: true });
     });
   });
 }
@@ -128,6 +170,7 @@ function startPolling(jobId) {
         await loadActivity();
         if (job.command === 'chart' && job.status === 'completed') showChartFromJob(job);
         if (job.command === 'news' && job.status === 'completed') showNewsFromJob(job);
+        if (['scan', 'backtest'].includes(job.command) && job.status === 'completed') showRunReportFromJob(job);
       }
     } catch (error) {
       renderLatestActivity({ status: 'failed', command: 'unknown', error: error.message });
@@ -161,6 +204,10 @@ function renderRunProgress(job) {
     ${output}${error}
     ${job.logs ? `<pre class="job-log">${escapeHtml(job.logs.slice(-5000))}</pre>` : ''}
   `;
+  if (job.status !== 'completed' && $('runReportPreview')) {
+    $('runReportPreview').className = 'panel preview empty';
+    $('runReportPreview').textContent = `${job.command === 'scan' ? 'Scan' : 'Backtest'} report will appear here when the run completes.`;
+  }
 }
 
 async function loadRunProgress() {
@@ -173,6 +220,7 @@ async function loadRunProgress() {
     return;
   }
   renderRunProgress(job);
+  if (job.status === 'completed') showRunReportFromJob(job);
 }
 
 function renderActivityPageStatus(job) {
@@ -189,6 +237,14 @@ function renderActivityPageStatus(job) {
       button.textContent = 'Run News Summary';
     }
   }
+}
+
+function latestActiveItem(items, type) {
+  return items.find((item) => item.activity_type === type && !isTerminalStatus(item.status));
+}
+
+function latestItem(items, type) {
+  return items.find((item) => item.activity_type === type);
 }
 
 async function loadActivity() {
@@ -214,6 +270,15 @@ async function loadActivity() {
   box.querySelectorAll('[data-cancel-url]').forEach((button) => {
     button.addEventListener('click', () => cancelActivity(button.dataset.cancelUrl));
   });
+}
+
+async function fetchLatestSessionId(type, savedId) {
+  const items = await (await api('/api/activity')).json();
+  const active = latestActiveItem(items, type);
+  if (active) return active.id;
+  if (savedId) return savedId;
+  const latest = latestItem(items, type);
+  return latest ? latest.id : null;
 }
 
 function startActivityPolling() {
@@ -255,7 +320,7 @@ async function loadRuns() {
   renderRunList('chartRuns', 'charts', runs.charts);
   renderRunList('newsRuns', 'news', runs.news || []);
   renderRunList('agentRuns', 'agents', runs.agents || []);
-  renderRunList('oracleRuns', 'oracle', runs.oracle || []);
+  renderRunList('trendCatcherRuns', 'trend-catcher', runs['trend-catcher'] || []);
 }
 
 function renderRunList(containerId, kind, runs) {
@@ -409,6 +474,33 @@ async function showNewsFromJob(job) {
   `;
 }
 
+async function showRunReportFromJob(job) {
+  if (!job.output_dir || !['scan', 'backtest'].includes(job.command) || !$('runReportPreview')) return;
+  const runKind = job.run_kind || (job.command === 'scan' ? 'scans' : 'backtests');
+  const reportName = job.command === 'scan' ? 'portfolio_report.md' : 'backtest_report.md';
+  try {
+    const detail = await (await api(`/api/runs/${runKind}/${job.output_dir}`)).json();
+    const report = detail.files.find((file) => file.name === reportName);
+    if (!report) {
+      $('runReportPreview').className = 'panel preview empty';
+      $('runReportPreview').textContent = `${job.command === 'scan' ? 'Scan' : 'Backtest'} finished, but ${reportName} was not found.`;
+      return;
+    }
+    const preview = await (await api(`/api/preview/${runKind}/${job.output_dir}/${report.name}`)).json();
+    $('runReportPreview').className = 'panel preview';
+    $('runReportPreview').innerHTML = `
+      <div class="panel-title-row">
+        <h3>${job.command === 'scan' ? 'Current Scan Report' : 'Backtest Report'}</h3>
+        <a class="download" href="${report.url}" target="_blank">Open report</a>
+      </div>
+      <div class="markdown-body">${renderMarkdown(preview.text || '')}</div>
+    `;
+  } catch (error) {
+    $('runReportPreview').className = 'panel preview empty';
+    $('runReportPreview').textContent = `Could not load ${job.command} report: ${error.message}`;
+  }
+}
+
 async function startAgentFromQuestion(question) {
   const query = question.trim();
   const status = $('agentStatus');
@@ -418,6 +510,7 @@ async function startAgentFromQuestion(question) {
   }
   $('askAgent').disabled = true;
   $('askAgent').textContent = 'Researching...';
+  $('agentQuestion').value = '';
   status.textContent = 'Starting agent session...';
   $('agentConversation').className = 'agent-conversation';
   $('agentConversation').innerHTML = chatMessageBubble({ role: 'user', content: query, created_at: new Date().toISOString() });
@@ -427,8 +520,8 @@ async function startAgentFromQuestion(question) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker: '', query }),
     })).json();
-    $('agentQuestion').value = '';
     state.agentSessionId = session.id;
+    localStorage.setItem('marketSignalScanner.agentSessionId', session.id);
     renderAgentSession(session);
     renderLatestActivity({ ...session, command: 'agent', title: session.ticker ? `agent ${session.ticker}` : 'agent research', run_kind: 'agents' });
     await loadActivity();
@@ -437,6 +530,24 @@ async function startAgentFromQuestion(question) {
     status.textContent = `Could not start agent: ${error.message}`;
     $('askAgent').disabled = false;
     $('askAgent').textContent = 'Ask';
+  }
+}
+
+async function restoreAgentSession() {
+  if (state.agentPollTimer || state.agentSessionId) return;
+  const savedId = localStorage.getItem('marketSignalScanner.agentSessionId');
+  let sessionId = null;
+  try {
+    sessionId = await fetchLatestSessionId('agent', savedId);
+    if (!sessionId) return;
+    const session = await (await api(`/api/agent/sessions/${sessionId}`)).json();
+    state.agentSessionId = session.id;
+    localStorage.setItem('marketSignalScanner.agentSessionId', session.id);
+    renderAgentSession(session);
+    if (!isTerminalStatus(session.status)) startAgentPolling(session.id);
+  } catch (error) {
+    if (savedId === sessionId) localStorage.removeItem('marketSignalScanner.agentSessionId');
+    $('agentStatus').textContent = `Could not restore agent session: ${error.message}`;
   }
 }
 
@@ -461,16 +572,20 @@ function startAgentPolling(sessionId) {
 }
 
 function renderAgentSession(session) {
+  localStorage.setItem('marketSignalScanner.agentSessionId', session.id);
   $('agentSessionBadge').className = `badge ${session.status}`;
   $('agentSessionBadge').textContent = session.status;
   const out = session.output_dir ? ` Output: agents/${session.output_dir}.` : '';
   const err = session.error ? ` Error: ${session.error}.` : '';
   $('agentStatus').textContent = `Agent ${session.status}.${out}${err}`;
   renderAgentConversation(session);
+  $('askAgent').disabled = !isTerminalStatus(session.status);
+  $('askAgent').textContent = isTerminalStatus(session.status) ? 'Ask' : 'Researching...';
   if (isTerminalStatus(session.status)) {
-    if (session.status !== 'completed') state.agentSessionId = null;
-    $('askAgent').disabled = false;
-    $('askAgent').textContent = 'Ask';
+    if (session.status !== 'completed') {
+      state.agentSessionId = null;
+      localStorage.removeItem('marketSignalScanner.agentSessionId');
+    }
   }
 }
 
@@ -594,6 +709,7 @@ function appendChatMessage(containerId, message) {
 
 function resetAgentConversation() {
   state.agentSessionId = null;
+  localStorage.removeItem('marketSignalScanner.agentSessionId');
   if (state.agentPollTimer) {
     clearInterval(state.agentPollTimer);
     state.agentPollTimer = null;
@@ -635,66 +751,89 @@ async function askAgentQuestion() {
   }
 }
 
-async function startOracleFromUi() {
-  $('runOracle').disabled = true;
-  $('runOracle').textContent = 'Oracle Running...';
-  $('oracleStatus').textContent = 'Starting Oracle scan...';
-  $('oracleConversation').className = 'agent-conversation';
-  $('oracleConversation').innerHTML = '';
-  $('oracleReport').className = 'panel preview empty';
-  $('oracleReport').textContent = 'Oracle is scanning markets...';
+async function startTrendCatcherFromUi() {
+  $('runTrendCatcher').disabled = true;
+  $('runTrendCatcher').textContent = 'Trend Catcher Running...';
+  $('trendCatcherStatus').textContent = 'Starting Trend Catcher scan...';
+  $('trendCatcherConversation').className = 'agent-conversation';
+  $('trendCatcherConversation').innerHTML = '';
+  $('trendCatcherReport').className = 'panel preview empty';
+  $('trendCatcherReport').textContent = 'Trend Catcher is scanning markets...';
   try {
-    const session = await (await api('/api/oracle/sessions', { method: 'POST' })).json();
-    state.oracleSessionId = session.id;
-    renderOracleSession(session);
-    renderLatestActivity({ ...session, command: 'oracle', title: 'oracle', run_kind: 'oracle' });
+    const session = await (await api('/api/trend-catcher/sessions', { method: 'POST' })).json();
+    state.trendCatcherSessionId = session.id;
+    localStorage.setItem('marketSignalScanner.trendCatcherSessionId', session.id);
+    renderTrendCatcherSession(session);
+    renderLatestActivity({ ...session, command: 'trend-catcher', title: 'trend-catcher', run_kind: 'trend-catcher' });
     await loadActivity();
-    startOraclePolling(session.id);
+    startTrendCatcherPolling(session.id);
   } catch (error) {
-    $('oracleStatus').textContent = `Could not start Oracle: ${error.message}`;
-    $('runOracle').disabled = false;
-    $('runOracle').textContent = 'Run Oracle';
+    $('trendCatcherStatus').textContent = `Could not start Trend Catcher: ${error.message}`;
+    $('runTrendCatcher').disabled = false;
+    $('runTrendCatcher').textContent = 'Run Trend Catcher';
   }
 }
 
-function startOraclePolling(sessionId) {
-  if (state.oraclePollTimer) clearInterval(state.oraclePollTimer);
-  state.oraclePollTimer = setInterval(async () => {
+async function restoreTrendCatcherSession() {
+  if (state.trendCatcherPollTimer || state.trendCatcherSessionId) return;
+  const savedId = localStorage.getItem('marketSignalScanner.trendCatcherSessionId');
+  let sessionId = null;
+  try {
+    sessionId = await fetchLatestSessionId('trend-catcher', savedId);
+    if (!sessionId) return;
+    const session = await (await api(`/api/trend-catcher/sessions/${sessionId}`)).json();
+    state.trendCatcherSessionId = session.id;
+    localStorage.setItem('marketSignalScanner.trendCatcherSessionId', session.id);
+    renderTrendCatcherSession(session);
+    if (!isTerminalStatus(session.status)) startTrendCatcherPolling(session.id);
+  } catch (error) {
+    if (savedId === sessionId) localStorage.removeItem('marketSignalScanner.trendCatcherSessionId');
+    $('trendCatcherStatus').textContent = `Could not restore Trend Catcher session: ${error.message}`;
+  }
+}
+
+function startTrendCatcherPolling(sessionId) {
+  if (state.trendCatcherPollTimer) clearInterval(state.trendCatcherPollTimer);
+  const pollTrendCatcher = async () => {
     try {
-      const session = await (await api(`/api/oracle/sessions/${sessionId}`)).json();
-      renderOracleSession(session);
-      renderLatestActivity({ ...session, command: 'oracle', title: 'oracle', run_kind: 'oracle', logs: formatEventsAsLog(session.events || []) });
+      const session = await (await api(`/api/trend-catcher/sessions/${sessionId}`)).json();
+      renderTrendCatcherSession(session);
+      renderLatestActivity({ ...session, command: 'trend-catcher', title: 'trend-catcher', run_kind: 'trend-catcher', logs: formatEventsAsLog(session.events || []) });
       if (isTerminalStatus(session.status)) {
-        clearInterval(state.oraclePollTimer);
-        state.oraclePollTimer = null;
+        clearInterval(state.trendCatcherPollTimer);
+        state.trendCatcherPollTimer = null;
         await loadRuns();
         await loadActivity();
       }
     } catch (error) {
-      $('oracleStatus').textContent = `Oracle polling failed: ${error.message}`;
-      clearInterval(state.oraclePollTimer);
+      $('trendCatcherStatus').textContent = `Trend Catcher polling failed: ${error.message}`;
+      clearInterval(state.trendCatcherPollTimer);
     }
-  }, 1500);
+  };
+  pollTrendCatcher();
+  state.trendCatcherPollTimer = setInterval(pollTrendCatcher, 1500);
 }
 
-function renderOracleSession(session) {
-  $('oracleSessionBadge').className = `badge ${session.status}`;
-  $('oracleSessionBadge').textContent = session.status;
-  const out = session.output_dir ? ` Output: oracle/${session.output_dir}.` : '';
+function renderTrendCatcherSession(session) {
+  localStorage.setItem('marketSignalScanner.trendCatcherSessionId', session.id);
+  $('trendCatcherSessionBadge').className = `badge ${session.status}`;
+  $('trendCatcherSessionBadge').textContent = session.status;
+  const out = session.output_dir ? ` Output: trend-catcher/${session.output_dir}.` : '';
   const err = session.error ? ` Error: ${session.error}.` : '';
-  $('oracleStatus').textContent = `Oracle ${session.status}.${out}${err}`;
-  renderConversation('oracleConversation', session.events || [], [], session.status, 'Oracle scan');
+  $('trendCatcherStatus').textContent = `Trend Catcher ${session.status}.${out}${err}`;
+  $('runTrendCatcher').disabled = !isTerminalStatus(session.status);
+  $('runTrendCatcher').textContent = isTerminalStatus(session.status) ? 'Run Trend Catcher' : 'Trend Catcher Running...';
+  renderConversation('trendCatcherConversation', session.events || [], [], session.status, 'Trend Catcher scan');
   if (session.report) {
-    $('oracleReport').className = 'panel preview';
-    const reportLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_report.md" target="_blank">Open Oracle report</a>` : '';
-    const sourceLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_sources.csv" target="_blank">Open sources</a>` : '';
-    const pulseLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_market_pulse.csv" target="_blank">Open market pulse</a>` : '';
-    const logLink = session.output_dir ? `<a class="download" href="/api/files/oracle/${session.output_dir}/oracle_log.md" target="_blank">Open log</a>` : '';
-    $('oracleReport').innerHTML = `<div class="panel-title-row">${reportLink}${sourceLink}${pulseLink}${logLink}</div>${renderMarkdown(session.report)}`;
+    $('trendCatcherReport').className = 'panel preview';
+    const reportLink = session.output_dir ? `<a class="download" href="/api/files/trend-catcher/${session.output_dir}/trend_catcher_report.md" target="_blank">Open Trend Catcher report</a>` : '';
+    const sourceLink = session.output_dir ? `<a class="download" href="/api/files/trend-catcher/${session.output_dir}/trend_catcher_sources.csv" target="_blank">Open sources</a>` : '';
+    const pulseLink = session.output_dir ? `<a class="download" href="/api/files/trend-catcher/${session.output_dir}/trend_catcher_market_pulse.csv" target="_blank">Open market pulse</a>` : '';
+    const logLink = session.output_dir ? `<a class="download" href="/api/files/trend-catcher/${session.output_dir}/trend_catcher_log.md" target="_blank">Open log</a>` : '';
+    $('trendCatcherReport').innerHTML = `<div class="panel-title-row">${reportLink}${sourceLink}${pulseLink}${logLink}</div>${renderMarkdown(session.report)}`;
   }
   if (isTerminalStatus(session.status)) {
-    $('runOracle').disabled = false;
-    $('runOracle').textContent = 'Run Oracle';
+    state.trendCatcherSessionId = null;
   }
 }
 
@@ -838,8 +977,9 @@ async function shutdownServer() {
 }
 
 function wireActions() {
+  wireTabLinks();
   wireNewsAction();
-  $('runOracle').addEventListener('click', startOracleFromUi);
+  $('runTrendCatcher').addEventListener('click', startTrendCatcherFromUi);
   $('resetAgent').addEventListener('click', resetAgentConversation);
   $('askAgent').addEventListener('click', askAgentQuestion);
   $('agentQuestion').addEventListener('keydown', (event) => {

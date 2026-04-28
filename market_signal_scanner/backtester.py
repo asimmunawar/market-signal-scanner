@@ -384,6 +384,8 @@ def build_backtest_report(summary: dict[str, Any], trades: pd.DataFrame, config:
     lines = [
         "# Backtest Report",
         "",
+        f"Generated: {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z%z')}",
+        "",
         "This report is a historical simulation of scanner rules. It is not financial advice and does not guarantee future returns.",
         "",
         "## Summary",

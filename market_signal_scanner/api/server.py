@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from market_signal_scanner.agent_researcher import append_agent_log_event, answer_followup, run_agent_research, sync_agent_log_llm_calls
 from market_signal_scanner.config_loader import load_config
-from market_signal_scanner.oracle import append_oracle_log_event, run_oracle
+from market_signal_scanner.trend_catcher import append_trend_catcher_log_event, run_trend_catcher
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -87,8 +87,8 @@ jobs: dict[str, Job] = {}
 jobs_lock = threading.Lock()
 agent_sessions: dict[str, dict[str, Any]] = {}
 agent_lock = threading.Lock()
-oracle_sessions: dict[str, dict[str, Any]] = {}
-oracle_lock = threading.Lock()
+trend_catcher_sessions: dict[str, dict[str, Any]] = {}
+trend_catcher_lock = threading.Lock()
 managed_ollama_process: Optional[subprocess.Popen[str]] = None
 llm_lock = threading.Lock()
 
@@ -204,54 +204,55 @@ def list_runs() -> dict[str, Any]:
         "charts": runs_for("charts"),
         "news": runs_for("news"),
         "agents": runs_for("agents"),
-        "oracle": runs_for("oracle"),
+        "trend-catcher": runs_for("trend-catcher"),
     }
 
 
-@app.post("/api/oracle/sessions")
-def create_oracle_session() -> dict[str, Any]:
+@app.post("/api/trend-catcher/sessions")
+def create_trend_catcher_session() -> dict[str, Any]:
     session_id = str(uuid.uuid4())
+    created_at = datetime.now().isoformat(timespec="seconds")
     session = {
         "id": session_id,
         "status": "queued",
-        "events": [],
+        "events": [{"kind": "thought", "message": "Queued Trend Catcher market disruption scan.", "created_at": created_at}],
         "output_dir": None,
         "report": "",
         "sources": [],
         "market_pulse": [],
         "error": None,
         "cancel_requested": False,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": created_at,
         "finished_at": None,
     }
-    with oracle_lock:
-        oracle_sessions[session_id] = session
-    thread = threading.Thread(target=run_oracle_session, args=(session_id,), daemon=True)
+    with trend_catcher_lock:
+        trend_catcher_sessions[session_id] = session
+    thread = threading.Thread(target=run_trend_catcher_session, args=(session_id,), daemon=True)
     thread.start()
-    return serialize_oracle_session(session)
+    return serialize_trend_catcher_session(session)
 
 
-@app.get("/api/oracle/sessions/{session_id}")
-def get_oracle_session(session_id: str) -> dict[str, Any]:
-    with oracle_lock:
-        session = oracle_sessions.get(session_id)
+@app.get("/api/trend-catcher/sessions/{session_id}")
+def get_trend_catcher_session(session_id: str) -> dict[str, Any]:
+    with trend_catcher_lock:
+        session = trend_catcher_sessions.get(session_id)
     if session is None:
-        raise HTTPException(status_code=404, detail="Oracle session not found")
-    return serialize_oracle_session(session)
+        raise HTTPException(status_code=404, detail="Trend Catcher session not found")
+    return serialize_trend_catcher_session(session)
 
 
-@app.post("/api/oracle/sessions/{session_id}/cancel")
-def cancel_oracle_session(session_id: str) -> dict[str, Any]:
-    with oracle_lock:
-        session = oracle_sessions.get(session_id)
+@app.post("/api/trend-catcher/sessions/{session_id}/cancel")
+def cancel_trend_catcher_session(session_id: str) -> dict[str, Any]:
+    with trend_catcher_lock:
+        session = trend_catcher_sessions.get(session_id)
         if session is None:
-            raise HTTPException(status_code=404, detail="Oracle session not found")
+            raise HTTPException(status_code=404, detail="Trend Catcher session not found")
         if session["status"] in {"completed", "failed", "cancelled"}:
-            return serialize_oracle_session(session)
+            return serialize_trend_catcher_session(session)
         session["cancel_requested"] = True
         session["status"] = "cancelling"
         session["events"].append({"kind": "observation", "message": "Cancel requested by user.", "created_at": datetime.now().isoformat(timespec="seconds")})
-        return serialize_oracle_session(session)
+        return serialize_trend_catcher_session(session)
 
 
 @app.post("/api/agent/sessions")
@@ -353,7 +354,7 @@ def delete_run(kind: str, run_id: str) -> dict[str, Any]:
 
 @app.delete("/api/runs/{kind}")
 def delete_runs_for_kind(kind: str) -> dict[str, Any]:
-    if kind not in {"scans", "backtests", "charts", "news", "agents", "oracle"}:
+    if kind not in {"scans", "backtests", "charts", "news", "agents", "trend-catcher"}:
         raise HTTPException(status_code=400, detail="Invalid run kind")
     root = (OUTPUT_ROOT / kind).resolve()
     if not root.exists():
@@ -420,8 +421,8 @@ def list_activity() -> list[dict[str, Any]]:
         items.extend(serialize_job(job) for job in jobs.values())
     with agent_lock:
         items.extend(serialize_agent_activity(session) for session in agent_sessions.values())
-    with oracle_lock:
-        items.extend(serialize_oracle_activity(session) for session in oracle_sessions.values())
+    with trend_catcher_lock:
+        items.extend(serialize_trend_catcher_activity(session) for session in trend_catcher_sessions.values())
     return sorted(items, key=lambda item: item.get("created_at") or "", reverse=True)
 
 
@@ -577,51 +578,51 @@ def run_agent_session(session_id: str) -> None:
             session["events"].append({"kind": "observation", "message": f"{label}: {exc}", "created_at": session["finished_at"]})
 
 
-def run_oracle_session(session_id: str) -> None:
-    with oracle_lock:
-        session = oracle_sessions[session_id]
+def run_trend_catcher_session(session_id: str) -> None:
+    with trend_catcher_lock:
+        session = trend_catcher_sessions[session_id]
         if session.get("cancel_requested"):
             session["status"] = "cancelled"
             session["finished_at"] = datetime.now().isoformat(timespec="seconds")
             return
         session["status"] = "running"
-        session["events"].append({"kind": "thought", "message": "Starting Oracle market disruption scan.", "created_at": datetime.now().isoformat(timespec="seconds")})
+        session["events"].append({"kind": "thought", "message": "Starting Trend Catcher market disruption scan.", "created_at": datetime.now().isoformat(timespec="seconds")})
 
     def progress(kind: str, message: str) -> None:
-        with oracle_lock:
-            current = oracle_sessions[session_id]
+        with trend_catcher_lock:
+            current = trend_catcher_sessions[session_id]
             if current.get("cancel_requested"):
-                raise SessionCancelled("Oracle cancelled by user.")
+                raise SessionCancelled("Trend Catcher cancelled by user.")
             current["events"].append({"kind": kind, "message": message, "created_at": datetime.now().isoformat(timespec="seconds")})
 
     try:
         config = load_config(CONFIG_PATH)
-        result = run_oracle(config=config, output_base=OUTPUT_ROOT, progress=progress)
-        with oracle_lock:
-            session = oracle_sessions[session_id]
+        result = run_trend_catcher(config=config, output_base=OUTPUT_ROOT, progress=progress)
+        with trend_catcher_lock:
+            session = trend_catcher_sessions[session_id]
             session["status"] = "completed"
             session["output_dir"] = result.output_dir.name
             session["report"] = result.report
             session["sources"] = [item.__dict__ for item in result.sources]
             session["market_pulse"] = result.market_pulse
             session["finished_at"] = datetime.now().isoformat(timespec="seconds")
-            saved_event = {"kind": "observation", "message": f"Saved Oracle outputs to oracle/{result.output_dir.name}.", "created_at": session["finished_at"]}
+            saved_event = {"kind": "observation", "message": f"Saved Trend Catcher outputs to trend-catcher/{result.output_dir.name}.", "created_at": session["finished_at"]}
             session["events"].append(saved_event)
-        append_oracle_log_event(result.output_dir, saved_event)
+        append_trend_catcher_log_event(result.output_dir, saved_event)
     except SessionCancelled as exc:
-        with oracle_lock:
-            session = oracle_sessions[session_id]
+        with trend_catcher_lock:
+            session = trend_catcher_sessions[session_id]
             session["status"] = "cancelled"
             session["error"] = str(exc)
             session["finished_at"] = datetime.now().isoformat(timespec="seconds")
             session["events"].append({"kind": "observation", "message": str(exc), "created_at": session["finished_at"]})
     except Exception as exc:
-        with oracle_lock:
-            session = oracle_sessions[session_id]
+        with trend_catcher_lock:
+            session = trend_catcher_sessions[session_id]
             session["status"] = "cancelled" if session.get("cancel_requested") else "failed"
             session["error"] = str(exc)
             session["finished_at"] = datetime.now().isoformat(timespec="seconds")
-            label = "Oracle cancelled" if session.get("cancel_requested") else "Oracle failed"
+            label = "Trend Catcher cancelled" if session.get("cancel_requested") else "Trend Catcher failed"
             session["events"].append({"kind": "observation", "message": f"{label}: {exc}", "created_at": session["finished_at"]})
 
 
@@ -681,7 +682,7 @@ def newest_run(kind: str, preferred: Optional[list[str]] = None) -> Optional[Pat
 
 
 def safe_run_dir(kind: str, run_id: str) -> Path:
-    if kind not in {"scans", "backtests", "charts", "news", "agents", "oracle"}:
+    if kind not in {"scans", "backtests", "charts", "news", "agents", "trend-catcher"}:
         raise HTTPException(status_code=400, detail="Invalid run kind")
     root = (OUTPUT_ROOT / kind).resolve()
     run_dir = (root / run_id).resolve()
@@ -745,23 +746,23 @@ def serialize_agent_activity(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def serialize_oracle_activity(session: dict[str, Any]) -> dict[str, Any]:
+def serialize_trend_catcher_activity(session: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": session["id"],
-        "activity_type": "oracle",
-        "command": "oracle",
-        "title": "oracle",
+        "activity_type": "trend-catcher",
+        "command": "trend-catcher",
+        "title": "trend-catcher",
         "subtitle": "early trend discovery",
         "status": session["status"],
         "created_at": session.get("created_at"),
         "started_at": session.get("created_at"),
         "finished_at": session.get("finished_at"),
         "output_dir": session.get("output_dir"),
-        "run_kind": "oracle",
+        "run_kind": "trend-catcher",
         "logs": format_session_events(session.get("events", [])),
         "error": session.get("error"),
         "cancellable": session["status"] in {"queued", "running", "cancelling"},
-        "cancel_url": f"/api/oracle/sessions/{session['id']}/cancel",
+        "cancel_url": f"/api/trend-catcher/sessions/{session['id']}/cancel",
     }
 
 
@@ -789,13 +790,13 @@ def serialize_agent_session(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def serialize_oracle_session(session: dict[str, Any]) -> dict[str, Any]:
+def serialize_trend_catcher_session(session: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": session["id"],
         "status": session["status"],
         "events": session.get("events", []),
         "output_dir": session.get("output_dir"),
-        "run_kind": "oracle",
+        "run_kind": "trend-catcher",
         "report": session.get("report", ""),
         "sources": session.get("sources", []),
         "market_pulse": session.get("market_pulse", []),

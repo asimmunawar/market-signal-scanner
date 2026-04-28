@@ -8,7 +8,7 @@
 
 **A local-first market intelligence cockpit for scans, charts, backtests, news research, and early trend discovery.**
 
-`market-signal-scanner` helps you turn a configurable ticker universe into ranked market signals, reports, technical charts, backtests, and LLM-assisted research. It runs locally, writes transparent CSV/Markdown outputs, and includes an **Oracle** mode designed to look for fresh market trends before they become obvious.
+`market-signal-scanner` helps you turn a configurable ticker universe into ranked market signals, reports, technical charts, backtests, and LLM-assisted research. It runs locally, writes transparent CSV/Markdown outputs, and includes **Trend Catcher**, a broad-market mode designed to look for fresh market trends before they become obvious.
 
 > Educational and analytical software only. Not financial advice, investment advice, or a trading recommendation.
 
@@ -37,9 +37,9 @@ It combines deterministic quant-style signals with local AI research so the outp
 - **Charting** with candles, moving averages, Bollinger bands, support/resistance, trendlines, RSI, MACD, and volume
 - **News Summary** for ticker-level source-grounded summaries
 - **Agent Research** with LangGraph/ReAct-style web research and follow-up Q&A
-- **Oracle** for early market trend discovery across news, viral narratives, catalysts, price action, and attention shifts
+- **Trend Catcher** for early market trend discovery across news, viral narratives, catalysts, price action, and attention shifts
 - **Local LLM support** through Ollama by default
-- **Full audit logs** for Agent and Oracle prompts, responses, tool steps, sources, and outputs
+- **Full audit logs** for Agent and Trend Catcher prompts, responses, tool steps, sources, and outputs
 
 ## The Core Workflows
 
@@ -50,11 +50,11 @@ It combines deterministic quant-style signals with local AI research so the outp
 | Chart | Generates marked-up technical charts and chart reports | `output/charts/` |
 | News | Summarizes recent ticker news with signal/fundamental context | `output/news/` |
 | Agent | Performs deeper ticker or question-based research with follow-up chat | `output/agents/` |
-| Oracle | Searches for newly forming market trends without starting from a ticker | `output/oracle/` |
+| Trend Catcher | Searches for newly forming market trends without starting from a ticker | `output/trend-catcher/` |
 
-## Oracle
+## Trend Catcher
 
-Oracle is the “do not let me miss the move” mode.
+Trend Catcher is the “do not let me miss the move” mode.
 
 It does not start with a ticker or a favorite sector. It searches broadly for early market trends that may be forming now, including:
 
@@ -68,16 +68,16 @@ It does not start with a ticker or a favorite sector. It searches broadly for ea
 - pre-market or after-hours movers
 - crowded moves that may already be late
 
-Then it extracts explicit tickers from the discovered evidence and uses intraday market movement as verification. If nothing crosses the threshold, Oracle should say **Nothing Urgent** instead of forcing a trade idea.
+Then it extracts explicit tickers from the discovered evidence and uses intraday market movement as verification. If nothing crosses the threshold, Trend Catcher should say **Nothing Urgent** instead of forcing a trade idea.
 
-Oracle writes:
+Trend Catcher writes:
 
-- `oracle_report.md`
-- `oracle_sources.csv`
-- `oracle_market_pulse.csv`
-- `oracle_context.json`
-- `oracle_log.md`
-- `oracle_log.json`
+- `trend_catcher_report.md`
+- `trend_catcher_sources.csv`
+- `trend_catcher_market_pulse.csv`
+- `trend_catcher_context.json`
+- `trend_catcher_log.md`
+- `trend_catcher_log.json`
 
 The logs include the full prompts sent to the LLM and the full responses received.
 
@@ -166,10 +166,10 @@ Agent research:
 python market-signal-scanner.py agent --ticker AAPL --query "What is the latest buy/sell case?" --config config/config.yaml --output ./output
 ```
 
-Oracle:
+Trend Catcher:
 
 ```bash
-python market-signal-scanner.py oracle --config config/config.yaml --output ./output
+python market-signal-scanner.py trend-catcher --config config/config.yaml --output ./output
 ```
 
 ## Output Layout
@@ -183,7 +183,7 @@ output/
   charts/<timestamp>_<TICKER>/
   news/<timestamp>_<TICKER>/
   agents/<timestamp>_<TICKER>/
-  oracle/<timestamp>/
+  trend-catcher/<timestamp>/
 ```
 
 Generated outputs and caches are ignored by git:
@@ -208,7 +208,7 @@ Important sections:
 - `backtest`: dates, contributions, rebalance frequency, costs, slippage, benchmark
 - `news_summary`: source settings and local LLM settings
 - `agent`: ReAct/search depth and LLM settings
-- `oracle`: early trend discovery, search depth, pulse verification, and alert threshold
+- `oracle`: Trend Catcher settings kept under this config key for backward compatibility
 
 Example:
 
@@ -263,9 +263,9 @@ The GUI includes an **LLM** page that can:
 
 If the LLM is unavailable, the app still tries to write conservative fallback reports from the evidence it gathered.
 
-## Agent And Oracle Logs
+## Agent And Trend Catcher Logs
 
-Agent and Oracle runs include audit-friendly logs:
+Agent and Trend Catcher runs include audit-friendly logs:
 
 - full timeline of actions and observations
 - search queries
@@ -303,7 +303,7 @@ market_signal_scanner/
   api/server.py                 # FastAPI GUI backend
   web/                          # browser UI and app assets
   cli.py                        # command routing
-  oracle.py                     # early trend discovery
+  trend_catcher.py              # early trend discovery
   agent_researcher.py           # LangGraph/ReAct-style research
   news_summary.py               # ticker news summary
   config_loader.py              # YAML config parsing and groups
@@ -322,13 +322,13 @@ market_signal_scanner/
 - Fundamentals are skipped for crypto tickers.
 - Missing data is left missing; the app should not fabricate numbers.
 - Backtests are simulations, not predictions.
-- Agent, News, and Oracle reports are evidence summaries, not guarantees.
+- Agent, News, and Trend Catcher reports are evidence summaries, not guarantees.
 - Chart annotations such as support/resistance and trendlines are heuristics.
 - Transaction cost and slippage assumptions are simplified.
 
 ## Roadmap Ideas
 
-- Scheduled Oracle runs every 10-15 minutes
+- Scheduled Trend Catcher runs every 10-15 minutes
 - Email, Telegram, Discord, Slack, or macOS alerts
 - Alert memory and duplicate suppression
 - Portfolio-aware risk alerts
@@ -336,7 +336,7 @@ market_signal_scanner/
 - Earnings calendar
 - Options/IV signals
 - Sector rotation dashboard
-- Prediction tracking for Oracle/Agent calls
+- Prediction tracking for Trend Catcher/Agent calls
 - Docker packaging
 - macOS `.app` packaging
 
