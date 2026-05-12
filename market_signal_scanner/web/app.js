@@ -13,10 +13,15 @@ const state = {
   chartDrag: null,
   chartSelection: null,
   chartHover: null,
+  chartTickerChoices: null,
+  tickerDiscoveryMode: 'quick',
+  tickerDiscoveryCandidates: [],
   opportunityData: null,
   opportunityHover: null,
   opportunityPoints: [],
   opportunitySelected: null,
+  guardrailsData: null,
+  guardrailsSelected: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -88,6 +93,7 @@ function loadTabData(tab) {
   if (tab === 'llm') loadLlmStatus();
   if (tab === 'chart') ensureInteractiveChart();
   if (tab === 'opportunity') ensureOpportunityMap();
+  if (tab === 'guardrails') ensureGuardrails();
   if (tab === 'agent') {
     loadAgentSuggestions();
     restoreAgentSession();
@@ -145,6 +151,30 @@ function useAgentSuggestion(question) {
   input.setSelectionRange(input.value.length, input.value.length);
 }
 
+function openTickerChart(ticker) {
+  $('chartTicker').value = ticker;
+  syncChartTickerSelect(ticker);
+  activateTab('chart', { updateLocation: true });
+  loadInteractiveChart();
+}
+
+function runTickerNews(ticker) {
+  $('newsTicker').value = ticker;
+  activateTab('news', { updateLocation: true });
+  runNewsFromUi();
+}
+
+async function startDecisionAgent(ticker) {
+  const query = decisionResearchPrompt(ticker);
+  activateTab('agent', { updateLocation: true });
+  $('agentQuestion').value = query;
+  await startAgentFromQuestion(query, ticker);
+}
+
+function decisionResearchPrompt(ticker) {
+  return `I am a small long-term investor reviewing ${ticker}. Give me a concise decision-grade research brief before I buy, hold, trim, or avoid it. Separate the answer into: 1) technical analysis, 2) fundamental analysis, 3) recent news and catalysts with source dates, 4) FOMO/chase risk, 5) sell-review risks, 6) what I should verify before making a final decision. Do not give certainty or financial advice.`;
+}
+
 async function ensureOpportunityMap() {
   if (!state.opportunityData) await loadOpportunityMap();
   else drawOpportunityMap();
@@ -159,6 +189,7 @@ async function loadOpportunityMap() {
     state.opportunitySelected = null;
     renderOpportunitySummary();
     renderOpportunityBoards();
+    selectDefaultOpportunity();
     drawOpportunityMap();
     const shown = filteredOpportunityRows().length;
     if (status) status.textContent = `Latest scan ${data.run_id}: showing ${shown} of ${data.row_count} tickers.`;
@@ -193,24 +224,43 @@ function renderOpportunitySummary() {
   const attractive = quadrants.Attractive || 0;
   const speculative = quadrants.Speculative || 0;
   box.innerHTML = [
-    opportunityStat('Universe', rows.length, 'tickers'),
-    opportunityStat('Avg Score', averageScore.toFixed(1), 'scanner'),
-    opportunityStat('Strong Buy / Buy', `${recs['Strong Buy'] || 0} / ${recs.Buy || 0}`, 'ranked'),
-    opportunityStat('Attractive', attractive, 'lower-risk high score'),
-    opportunityStat('Speculative', speculative, 'higher-risk high score'),
+    opportunityStat('Universe', rows.length, 'tickers', 'How many tickers were included in the latest scan.'),
+    opportunityStat('Avg Score', averageScore.toFixed(1), 'scanner', 'Average scanner score across the universe. Positive is generally stronger; negative is weaker.'),
+    opportunityStat('Strong Buy / Buy', `${recs['Strong Buy'] || 0} / ${recs.Buy || 0}`, 'ranked', 'How many names currently rank in the top two scanner recommendation buckets.'),
+    opportunityStat('Attractive', attractive, 'lower-risk high score', 'Higher score with lower risk. These are research candidates, not automatic buys.'),
+    opportunityStat('Speculative', speculative, 'higher-risk high score', 'High score but also high risk. These deserve smaller sizing and more patience.'),
   ].join('');
 }
 
-function opportunityStat(label, value, note) {
-  return `<div class="opportunity-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong><em>${escapeHtml(note)}</em></div>`;
+function opportunityStat(label, value, note, help = '') {
+  const helpHtml = help ? ` ${helpTip(help)}` : '';
+  return `<div class="opportunity-stat"><span>${escapeHtml(label)}${helpHtml}</span><strong>${escapeHtml(String(value))}</strong><em>${escapeHtml(note)}</em></div>`;
 }
 
 function renderOpportunityBoards() {
   const rows = filteredOpportunityRows();
   renderOpportunityLeaderboard(rows);
   renderOpportunityHeatmap(rows);
+  if (!rows.some((row) => row.ticker === state.opportunitySelected)) {
+    state.opportunitySelected = null;
+    const detail = $('opportunityDetail');
+    if (detail) detail.innerHTML = '<div class="muted">Click a bubble or leaderboard row to inspect a ticker.</div>';
+  }
+  selectDefaultOpportunity();
   const status = $('opportunityStatus');
   if (status && state.opportunityData) status.textContent = `Latest scan ${state.opportunityData.run_id}: showing ${rows.length} of ${state.opportunityData.row_count} tickers.`;
+}
+
+function selectDefaultOpportunity() {
+  if (state.opportunitySelected) return;
+  const rows = filteredOpportunityRows();
+  const defaultRow = rows
+    .slice()
+    .sort((a, b) => Number(b.opportunity ?? b.score ?? -999) - Number(a.opportunity ?? a.score ?? -999))[0];
+  if (defaultRow) {
+    state.opportunitySelected = defaultRow.ticker;
+    renderOpportunityDetail(defaultRow);
+  }
 }
 
 function renderOpportunityLeaderboard(rows) {
@@ -414,22 +464,34 @@ function renderOpportunityDetail(row) {
     </div>
     <h3>${escapeHtml(row.ticker)}</h3>
     <p>${escapeHtml(row.name || row.ticker)}</p>
+    ${tickerActionBar(row.ticker)}
     <div class="opportunity-metrics">
-      ${metricTile('Score', numberText(row.score, 1))}
-      ${metricTile('Quality', numberText(row.opportunity, 1))}
-      ${metricTile('Risk', numberText(row.risk, 1))}
-      ${metricTile('RSI', numberText(row.rsi_14, 1))}
-      ${metricTile('1M', pctText(row.return_1m))}
-      ${metricTile('1Y', pctText(row.return_1y))}
+      ${metricTile('Score', numberText(row.score, 1), 'Overall scanner rating from -100 to +100. Higher means stronger combined signals.')}
+      ${metricTile('Quality', numberText(row.opportunity, 1), 'Score adjusted down for excessive risk and overbought readings.')}
+      ${metricTile('Risk', numberText(row.risk, 1), 'Composite of volatility and drawdown. Higher means bumpier and potentially harder to hold.')}
+      ${metricTile('RSI', numberText(row.rsi_14, 1), 'Momentum gauge. Above 70 can mean overbought; below 30 can mean oversold.')}
+      ${metricTile('1M', pctText(row.return_1m), 'Price return over roughly the last month.')}
+      ${metricTile('1Y', pctText(row.return_1y), 'Price return over roughly the last year.')}
     </div>
-    <div class="detail-list">
-      <div><span>Trend / Momentum</span><strong>${numberText(row.trend_score, 1)} / ${numberText(row.momentum_score, 1)}</strong></div>
-      <div><span>Risk Penalty</span><strong>${numberText(row.risk_penalty, 1)}</strong></div>
-      <div><span>Max Drawdown</span><strong>${pctText(row.max_drawdown)}</strong></div>
-      <div><span>Volatility</span><strong>${pctText(row.volatility_annual)}</strong></div>
-      <div><span>Volume Spike</span><strong>${numberText(row.volume_spike, 2)}x</strong></div>
-      <div><span>Quadrant</span><strong>${escapeHtml(row.quadrant)}</strong></div>
-    </div>
+    ${analysisGroup('Technical Analysis', 'Price, chart, momentum, volume, and risk behavior. Useful for timing and risk awareness, but not a business thesis.', [
+      ['Trend / Momentum', `${numberText(row.trend_score, 1)} / ${numberText(row.momentum_score, 1)}`, 'Trend checks moving averages and price direction. Momentum checks RSI, MACD, and rate of change.'],
+      ['RSI', numberText(row.rsi_14, 1), 'Momentum gauge. Above 70 can mean overbought; below 30 can mean oversold.'],
+      ['Max Drawdown', pctText(row.max_drawdown), 'Largest peak-to-trough decline in the measured period.'],
+      ['Volatility', pctText(row.volatility_annual), 'How much price tends to move around. Higher volatility can be harder to hold.'],
+      ['Volume Spike', `${numberText(row.volume_spike, 2)}x`, 'Recent volume compared with normal volume. Spikes can indicate attention or news.'],
+      ['Quadrant', row.quadrant, 'The map zone based on score and risk.'],
+    ])}
+    ${analysisGroup('Fundamental Analysis', 'Business, valuation, growth, profitability, balance sheet, and shareholder return. This is closer to the long-term thesis.', [
+      ['Forward P/E', numberText(row.forward_pe, 1), 'Expected price/earnings ratio. Lower is cheaper only if quality and growth are acceptable.'],
+      ['PEG', numberText(row.peg_ratio, 2), 'Valuation relative to growth. Lower can be better, but data can be noisy.'],
+      ['Price/Book', numberText(row.price_to_book, 2), 'Price compared with accounting book value. More useful for banks than software firms.'],
+      ['Revenue Growth', pctText(row.revenue_growth), 'Recent revenue growth where available.'],
+      ['Profit Margin', pctText(row.profit_margin), 'How much revenue becomes profit. Higher margins can signal quality.'],
+      ['Dividend Yield', pctText(row.dividend_yield), 'Cash dividend yield. Not all good long-term investments pay dividends.'],
+    ])}
+    ${analysisGroup('News / Research Next Step', 'News is not embedded in this scanner score. Use News Summary or Agent to check what changed recently before deciding.', [
+      ['Recommended action', 'Run Agent or News Summary', 'This checks fresh sources and helps explain what the numbers alone cannot.'],
+    ])}
     <div class="opportunity-links">
       ${row.yahoo_finance_url ? `<a href="${escapeHtml(row.yahoo_finance_url)}" target="_blank" rel="noopener noreferrer">Yahoo</a>` : ''}
       ${row.tradingview_url ? `<a href="${escapeHtml(row.tradingview_url)}" target="_blank" rel="noopener noreferrer">TradingView</a>` : ''}
@@ -437,8 +499,266 @@ function renderOpportunityDetail(row) {
   `;
 }
 
-function metricTile(label, value) {
-  return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`;
+function metricTile(label, value, help = '') {
+  return `<div><span>${escapeHtml(label)}${help ? ` ${helpTip(help)}` : ''}</span><strong>${escapeHtml(String(value))}</strong></div>`;
+}
+
+function tickerActionBar(ticker) {
+  return `
+    <div class="ticker-actions">
+      <button class="ghost small" type="button" data-open-chart="${escapeHtml(ticker)}">Open Chart</button>
+      <button class="ghost small" type="button" data-run-news="${escapeHtml(ticker)}">Run News Summary</button>
+      <button class="primary small" type="button" data-agent-research="${escapeHtml(ticker)}">Ask Agent Before Deciding</button>
+    </div>
+  `;
+}
+
+function analysisGroup(title, subtitle, rows) {
+  return `
+    <div class="analysis-group">
+      <h4>${escapeHtml(title)} ${helpTip(subtitle)}</h4>
+      <p>${escapeHtml(subtitle)}</p>
+      <div class="detail-list">
+        ${rows.map(([label, value, help]) => `<div><span>${escapeHtml(label)} ${helpTip(help)}</span><strong>${escapeHtml(String(value || 'n/a'))}</strong></div>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+async function ensureGuardrails() {
+  if (!state.guardrailsData) await loadGuardrails();
+  else renderGuardrails();
+}
+
+async function loadGuardrails() {
+  const summary = $('guardrailSummary');
+  if (summary) summary.innerHTML = '<div class="muted">Loading guardrails...</div>';
+  try {
+    const data = await (await api('/api/investor-guardrails')).json();
+    state.guardrailsData = data;
+    state.guardrailsSelected = null;
+    renderGuardrails();
+  } catch (error) {
+    if (summary) summary.innerHTML = `<div class="muted">${escapeHtml(error.message)}</div>`;
+    ['guardrailResearch', 'guardrailFomo', 'guardrailSellReview', 'guardrailSleep'].forEach((id) => {
+      $(id).innerHTML = '<div class="muted">Run a scan first.</div>';
+    });
+  }
+}
+
+function renderGuardrails() {
+  if (!state.guardrailsData) return;
+  renderGuardrailSummary();
+  renderGuardrailPreferenceReadout();
+  renderGuardrailList('guardrailResearch', state.guardrailsData.research || [], 'research');
+  renderGuardrailList('guardrailFomo', state.guardrailsData.fomo || [], 'fomo');
+  renderGuardrailList('guardrailSellReview', state.guardrailsData.sell_review || [], 'sell_review');
+  renderGuardrailList('guardrailSleep', state.guardrailsData.sleep_on_it || [], 'sleep_on_it');
+  renderGuardrailSizing();
+  const first = state.guardrailsSelected || (state.guardrailsData.research || [])[0] || (state.guardrailsData.fomo || [])[0];
+  if (first) renderGuardrailDetail(first);
+}
+
+function renderGuardrailSummary() {
+  const box = $('guardrailSummary');
+  const data = state.guardrailsData;
+  const summary = data.summary || {};
+  box.innerHTML = [
+    opportunityStat('Latest Scan', data.run_id, `${data.row_count} tickers`, 'The scan run used to build these guardrails.'),
+    opportunityStat('Research', summary.research_count || 0, 'calmer candidates', 'Tickers strong enough to research without obvious chase warnings.'),
+    opportunityStat('FOMO', summary.fomo_count || 0, 'slow down', 'Fast-moving or crowded names where emotion can overpower discipline.'),
+    opportunityStat('Sell Review', summary.sell_review_count || 0, 'check thesis', 'Potential weak holdings to review. This does not mean automatic sell.'),
+    opportunityStat('Sleep On It', summary.sleep_on_it_count || 0, 'high excitement/risk', 'Names where waiting before action may prevent a bad impulse decision.'),
+  ].join('');
+}
+
+function renderGuardrailList(containerId, items, mode) {
+  const box = $(containerId);
+  if (!box) return;
+  if (!items.length) {
+    box.innerHTML = '<div class="muted">Nothing urgent in this bucket.</div>';
+    return;
+  }
+  box.innerHTML = items.slice(0, 12).map((item) => `
+    <button class="guardrail-item" type="button" data-ticker="${escapeHtml(item.ticker)}" data-mode="${escapeHtml(mode)}">
+      <span>
+        <strong>${escapeHtml(item.ticker)}</strong>
+        <em>${escapeHtml(item.posture)}</em>
+      </span>
+      <span class="guardrail-mini">
+        <b>${numberText(item.score, 1)}</b>
+        <small>${escapeHtml(item.recommendation || '')}</small>
+      </span>
+    </button>
+  `).join('');
+}
+
+function renderGuardrailSizing() {
+  const box = $('guardrailSizing');
+  if (!box || !state.guardrailsData) return;
+  const budget = Math.max(0, Number($('guardrailBudget').value || 0));
+  const prefs = guardrailPreferences();
+  renderGuardrailPreferenceReadout();
+  const ideas = (state.guardrailsData.research || []).slice(0, 5);
+  if (!ideas.length || !budget) {
+    box.innerHTML = '<div class="muted">No sizing ideas available yet.</div>';
+    return;
+  }
+  const totalWeight = ideas.reduce((sum, item) => sum + guardrailSizingWeight(item), 0) || 1;
+  box.innerHTML = ideas.map((item) => {
+    const raw = budget * (guardrailSizingWeight(item) / totalWeight) * prefs.sizeMultiplier;
+    const capped = Math.min(raw, budget * (prefs.maxIdeaPct / 100));
+    const finalStarter = Math.max(5, Math.round(capped / 5) * 5);
+    return `<div><strong>${escapeHtml(item.ticker)}</strong><span>${money(finalStarter)} starter · score ${numberText(item.score, 1)} · risk ${numberText(item.risk, 1)}</span></div>`;
+  }).join('');
+}
+
+function guardrailSizingWeight(item) {
+  const score = Math.max(0, Number(item.score || 0));
+  const riskDrag = Math.max(0.35, 1 - Math.max(0, Number(item.risk || 0) - 25) / 120);
+  return Math.max(1, score * riskDrag);
+}
+
+function guardrailPreferences() {
+  const riskTolerance = clampNumber($('riskToleranceSlider')?.value, 1, 10, 5);
+  const timeHorizon = clampNumber($('timeHorizonSlider')?.value, 1, 10, 7);
+  const fomoBrake = clampNumber($('fomoBrakeSlider')?.value, 1, 10, 7);
+  const maxIdeaPct = clampNumber($('maxIdeaPctSlider')?.value, 5, 60, 25);
+  const riskMultiplier = 0.45 + riskTolerance * 0.07;
+  const horizonMultiplier = 0.72 + timeHorizon * 0.04;
+  const fomoMultiplier = 1.12 - fomoBrake * 0.055;
+  return {
+    riskTolerance,
+    timeHorizon,
+    fomoBrake,
+    maxIdeaPct,
+    sizeMultiplier: Math.max(0.25, Math.min(1.25, riskMultiplier * horizonMultiplier * fomoMultiplier)),
+  };
+}
+
+function renderGuardrailPreferenceReadout() {
+  const prefs = guardrailPreferences();
+  setTextIfPresent('riskToleranceValue', String(prefs.riskTolerance));
+  setTextIfPresent('timeHorizonValue', String(prefs.timeHorizon));
+  setTextIfPresent('fomoBrakeValue', String(prefs.fomoBrake));
+  setTextIfPresent('maxIdeaPctValue', `${prefs.maxIdeaPct}%`);
+  const riskText = prefs.riskTolerance <= 3 ? 'cautious' : prefs.riskTolerance >= 8 ? 'risk-tolerant' : 'balanced';
+  const horizonText = prefs.timeHorizon <= 3 ? 'shorter-term' : prefs.timeHorizon >= 8 ? 'long-term' : 'medium-term';
+  const fomoText = prefs.fomoBrake >= 8 ? 'strict anti-FOMO brake' : prefs.fomoBrake <= 3 ? 'light anti-FOMO brake' : 'moderate anti-FOMO brake';
+  const readout = $('preferenceReadout');
+  if (readout) {
+    readout.innerHTML = `Profile: <strong>${riskText}</strong>, <strong>${horizonText}</strong>, with a <strong>${fomoText}</strong>. Starter ideas are capped at <strong>${prefs.maxIdeaPct}%</strong> of this budget.`;
+  }
+}
+
+function setTextIfPresent(id, text) {
+  const element = $(id);
+  if (element) element.textContent = text;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function saveGuardrailPreferences() {
+  const prefs = guardrailPreferences();
+  localStorage.setItem('marketSignalScanner.guardrailPreferences', JSON.stringify({
+    riskTolerance: prefs.riskTolerance,
+    timeHorizon: prefs.timeHorizon,
+    fomoBrake: prefs.fomoBrake,
+    maxIdeaPct: prefs.maxIdeaPct,
+  }));
+}
+
+function loadGuardrailPreferences() {
+  let prefs = {};
+  try {
+    prefs = JSON.parse(localStorage.getItem('marketSignalScanner.guardrailPreferences') || '{}');
+  } catch {
+    prefs = {};
+  }
+  const defaults = { riskTolerance: 5, timeHorizon: 7, fomoBrake: 7, maxIdeaPct: 25 };
+  [
+    ['riskToleranceSlider', prefs.riskTolerance ?? defaults.riskTolerance],
+    ['timeHorizonSlider', prefs.timeHorizon ?? defaults.timeHorizon],
+    ['fomoBrakeSlider', prefs.fomoBrake ?? defaults.fomoBrake],
+    ['maxIdeaPctSlider', prefs.maxIdeaPct ?? defaults.maxIdeaPct],
+  ].forEach(([id, value]) => {
+    const element = $(id);
+    if (element) element.value = value;
+  });
+  renderGuardrailPreferenceReadout();
+}
+
+function resetGuardrailPreferences() {
+  localStorage.removeItem('marketSignalScanner.guardrailPreferences');
+  ['riskToleranceSlider', 'timeHorizonSlider', 'fomoBrakeSlider', 'maxIdeaPctSlider'].forEach((id) => {
+    const element = $(id);
+    if (element) element.value = element.defaultValue;
+  });
+  renderGuardrailSizing();
+  saveGuardrailPreferences();
+}
+
+function updateGuardrailPreferencesFromUi() {
+  renderGuardrailPreferenceReadout();
+  renderGuardrailSizing();
+  saveGuardrailPreferences();
+}
+
+function selectGuardrailItem(ticker, mode) {
+  const buckets = {
+    research: state.guardrailsData?.research || [],
+    fomo: state.guardrailsData?.fomo || [],
+    sell_review: state.guardrailsData?.sell_review || [],
+    sleep_on_it: state.guardrailsData?.sleep_on_it || [],
+  };
+  const item = (buckets[mode] || []).find((row) => row.ticker === ticker);
+  if (!item) return;
+  state.guardrailsSelected = item;
+  renderGuardrailDetail(item);
+}
+
+function renderGuardrailDetail(item) {
+  const box = $('guardrailDetail');
+  if (!box) return;
+  const noteKey = `marketSignalScanner.guardrailNote.${item.ticker}`;
+  const note = localStorage.getItem(noteKey) || '';
+  const prefs = guardrailPreferences();
+  box.innerHTML = `
+    <div class="guardrail-detail-head">
+      <div>
+        <h3>${escapeHtml(item.ticker)} Decision Checklist</h3>
+        <p>${escapeHtml(item.name || '')}</p>
+      </div>
+      <span class="rec-pill ${recommendationClass(item.recommendation)}">${escapeHtml(item.recommendation || '')}</span>
+    </div>
+    ${tickerActionBar(item.ticker)}
+    <div class="guardrail-detail-grid">
+      <div>
+        <h4>Posture</h4>
+        <p>${escapeHtml(item.posture || '')}</p>
+        <h4>Why It Flagged</h4>
+        <ul>${(item.reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>
+      </div>
+      <div>
+        <h4>Checklist Before Action</h4>
+        <label class="guardrail-check"><input type="checkbox" /> I can explain the thesis without mentioning today's price move.</label>
+        <label class="guardrail-check"><input type="checkbox" /> I checked valuation, debt, margin, and growth risks.</label>
+        <label class="guardrail-check"><input type="checkbox" /> I know what would make me sell or stop buying.</label>
+        <label class="guardrail-check"><input type="checkbox" /> I am using a starter size or DCA plan.</label>
+        <div class="preference-note">Your current profile: risk ${prefs.riskTolerance}/10, horizon ${prefs.timeHorizon}/10, FOMO brake ${prefs.fomoBrake}/10.</div>
+        <ul class="compact-list">${(item.checklist || []).map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+      </div>
+      <div class="guardrail-notes">
+        <h4>Decision Journal</h4>
+        <textarea id="guardrailNoteEditor" data-note-key="${escapeHtml(noteKey)}" placeholder="Write your thesis, reason to wait, or sell-review notes here.">${escapeHtml(note)}</textarea>
+        <div class="hint">Saved locally in this browser.</div>
+      </div>
+    </div>
+  `;
 }
 
 function wireOpportunityMap() {
@@ -569,6 +889,10 @@ function compactAxis(value) {
   return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
 }
 
+function helpTip(text) {
+  return `<span class="help-tip" tabindex="0" data-help="${escapeHtml(text)}">?</span>`;
+}
+
 function chartParams() {
   normalizeChartControls();
   const params = new URLSearchParams({
@@ -588,8 +912,40 @@ function chartParams() {
 }
 
 async function ensureInteractiveChart() {
+  await loadChartTickerChoices();
   if (!state.chartData) await loadInteractiveChart();
   else drawInteractiveChart();
+}
+
+async function loadChartTickerChoices(force = false) {
+  if (state.chartTickerChoices && !force) return;
+  const select = $('chartTickerSelect');
+  const list = $('chartTickerList');
+  if (!select || !list) return;
+  try {
+    const data = await (await api('/api/chart/tickers')).json();
+    const tickers = data.tickers || [];
+    state.chartTickerChoices = tickers;
+    const current = $('chartTicker').value.trim().toUpperCase();
+    select.innerHTML = [
+      '<option value="">Pick from list...</option>',
+      ...tickers.map((ticker) => `<option value="${escapeHtml(ticker)}">${escapeHtml(ticker)}</option>`),
+    ].join('');
+    list.innerHTML = tickers.map((ticker) => `<option value="${escapeHtml(ticker)}"></option>`).join('');
+    syncChartTickerSelect(current);
+  } catch (error) {
+    state.chartTickerChoices = [];
+    list.innerHTML = '';
+    select.innerHTML = '<option value="">Type custom ticker...</option>';
+  }
+}
+
+function syncChartTickerSelect(ticker) {
+  const select = $('chartTickerSelect');
+  if (!select) return;
+  const normalized = String(ticker || '').trim().toUpperCase();
+  const hasOption = [...select.options].some((option) => option.value === normalized);
+  select.value = hasOption ? normalized : '';
 }
 
 async function loadInteractiveChart() {
@@ -1256,7 +1612,7 @@ function renderLatestActivity(job) {
     <div><span class="badge ${job.status}">${job.status}</span> <strong>${escapeHtml(job.title || job.command)}</strong></div>
     <div class="hint">${job.started_at || job.created_at || ''}${job.finished_at ? ` → ${job.finished_at}` : ''}</div>
     ${output}${error}
-    ${job.logs ? `<pre class="job-log">${escapeHtml(job.logs.slice(-5000))}</pre>` : ''}
+    ${job.logs ? logDetails(job.logs, 5000) : ''}
   `;
 }
 
@@ -1269,7 +1625,7 @@ function renderRunProgress(job) {
     <div><span class="badge ${job.status}">${job.status}</span> <strong>${escapeHtml(job.command)}</strong></div>
     <div class="hint">${job.started_at || job.created_at || ''}${job.finished_at ? ` → ${job.finished_at}` : ''}</div>
     ${output}${error}
-    ${job.logs ? `<pre class="job-log">${escapeHtml(job.logs.slice(-5000))}</pre>` : ''}
+    ${job.logs ? logDetails(job.logs, 5000) : ''}
   `;
   if (job.status !== 'completed' && $('runReportPreview')) {
     $('runReportPreview').className = 'panel preview empty';
@@ -1332,11 +1688,20 @@ async function loadActivity() {
       <p>${job.started_at || job.created_at || ''}${job.finished_at ? ` → ${job.finished_at}` : ''}</p>
       ${job.output_dir ? `<p>Output: <code>${job.run_kind}/${job.output_dir}</code></p>` : ''}
       ${job.error ? `<p class="danger">${escapeHtml(job.error)}</p>` : ''}
-      ${job.logs ? `<pre class="job-log">${escapeHtml(job.logs.slice(-8000))}</pre>` : ''}
+      ${job.logs ? logDetails(job.logs, 8000) : ''}
     </section>`).join('');
   box.querySelectorAll('[data-cancel-url]').forEach((button) => {
     button.addEventListener('click', () => cancelActivity(button.dataset.cancelUrl));
   });
+}
+
+function logDetails(logs, maxLength = 5000) {
+  return `
+    <details class="log-details">
+      <summary>Show technical log</summary>
+      <pre class="job-log">${escapeHtml(String(logs || '').slice(-maxLength))}</pre>
+    </details>
+  `;
 }
 
 async function fetchLatestSessionId(type, savedId) {
@@ -1493,9 +1858,20 @@ async function previewFile(kind, runId, filename) {
     $('fileViewer').innerHTML = csvTable(preview.rows);
   } else if (preview.type === 'text') {
     $('fileViewer').className = 'viewer';
-    $('fileViewer').innerHTML = filename.toLowerCase().endsWith('.md')
-      ? renderMarkdown(preview.text)
-      : `<pre>${escapeHtml(preview.text)}</pre>`;
+    if (kind === 'charts' && filename.toLowerCase() === 'chart_report.md') {
+      const detail = await (await api(`/api/runs/charts/${runId}`)).json();
+      const image = detail.files.find((file) => file.name.endsWith('_technical_chart.png'));
+      $('fileViewer').innerHTML = `
+        <div class="chart-report-preview">
+          ${image ? `<img class="chart-report-image" src="${image.url}" alt="${escapeHtml(runId)} technical chart" />` : ''}
+          <div class="markdown-body">${renderMarkdown(preview.text)}</div>
+        </div>
+      `;
+    } else {
+      $('fileViewer').innerHTML = filename.toLowerCase().endsWith('.md')
+        ? `<div class="markdown-body">${renderMarkdown(preview.text)}</div>`
+        : `<pre>${escapeHtml(preview.text)}</pre>`;
+    }
   } else {
     $('fileViewer').className = 'viewer empty';
     $('fileViewer').textContent = 'Binary file preview is unavailable.';
@@ -1513,10 +1889,25 @@ async function showChartFromJob(job) {
   const detail = await (await api(`/api/runs/charts/${job.output_dir}`)).json();
   const image = detail.files.find((file) => file.name.endsWith('_technical_chart.png'));
   const report = detail.files.find((file) => file.name === 'chart_report.md');
-  $('chartPreview').className = 'panel preview';
+  let reportHtml = '<div class="empty">No chart report markdown found.</div>';
+  if (report) {
+    const preview = await (await api(`/api/preview/charts/${job.output_dir}/${report.name}`)).json();
+    reportHtml = `<div class="markdown-body">${renderMarkdown(preview.text || '')}</div>`;
+  }
+  $('chartPreview').className = 'panel preview chart-report-preview';
   $('chartPreview').innerHTML = `
-    ${image ? `<img src="${image.url}" alt="Generated chart" />` : ''}
-    ${report ? `<p><a class="download" href="${report.url}" target="_blank">Open chart report</a></p>` : ''}
+    <div class="panel-title-row">
+      <div>
+        <h3>Static Chart Report</h3>
+        <p class="compact">Saved technical-analysis snapshot. The image is for visual inspection; the explanation below tells you how to use it.</p>
+      </div>
+      <div class="button-row">
+        ${image ? `<a class="download" href="${image.url}" target="_blank">Open PNG</a>` : ''}
+        ${report ? `<a class="download" href="${report.url}" target="_blank">Open Markdown</a>` : ''}
+      </div>
+    </div>
+    ${image ? `<img class="chart-report-image" src="${image.url}" alt="${escapeHtml(job.output_dir)} technical chart" />` : '<div class="empty">No chart image found.</div>'}
+    ${reportHtml}
   `;
 }
 
@@ -1568,7 +1959,7 @@ async function showRunReportFromJob(job) {
   }
 }
 
-async function startAgentFromQuestion(question) {
+async function startAgentFromQuestion(question, ticker = '') {
   const query = question.trim();
   const status = $('agentStatus');
   if (!query) {
@@ -1585,7 +1976,7 @@ async function startAgentFromQuestion(question) {
     const session = await (await api('/api/agent/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker: '', query }),
+      body: JSON.stringify({ ticker, query }),
     })).json();
     state.agentSessionId = session.id;
     localStorage.setItem('marketSignalScanner.agentSessionId', session.id);
@@ -1909,6 +2300,7 @@ async function loadConfig() {
     const text = await (await api('/api/config')).text();
     $('configEditor').value = text;
     $('configStatus').textContent = 'Config loaded.';
+    loadConfigTickers();
   } catch (error) {
     $('configStatus').textContent = `Could not load config: ${error.message}`;
   }
@@ -1922,10 +2314,185 @@ async function saveConfig() {
       body: JSON.stringify({ text: $('configEditor').value }),
     });
     refreshThemeStylesheet();
+    await loadChartTickerChoices(true);
+    await loadConfigTickers();
     $('configStatus').textContent = 'Saved config/config.yaml.';
   } catch (error) {
     $('configStatus').textContent = `Save failed: ${error.message}`;
   }
+}
+
+async function searchTickerDiscovery(mode = 'quick') {
+  state.tickerDiscoveryMode = mode;
+  const query = $('tickerDiscoveryQuery').value.trim();
+  const status = $('tickerDiscoveryStatus');
+  const box = $('tickerDiscoveryResults');
+  if (!query) {
+    status.textContent = 'Enter a theme or search phrase first.';
+    return;
+  }
+  const isDeep = mode === 'deep';
+  status.textContent = isDeep ? 'Running deep research search. This may take a minute...' : 'Searching for ticker ideas...';
+  box.className = 'ticker-discovery-results empty';
+  box.textContent = isDeep ? 'Searching the web, reading sources, and asking the LLM to extract public tickers...' : 'Searching...';
+  try {
+    const data = await (await api(isDeep ? '/api/ticker-discovery/deep' : '/api/ticker-discovery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, max_results: 24 }),
+    })).json();
+    const sourceNote = data.sources_reviewed ? ` Sources reviewed: ${data.sources_reviewed}.` : '';
+    status.textContent = `${data.count} candidate ticker(s) found.${sourceNote} These are watchlist ideas, not recommendations.`;
+    state.tickerDiscoveryCandidates = data.candidates || [];
+    renderTickerDiscoveryResults(state.tickerDiscoveryCandidates);
+  } catch (error) {
+    status.textContent = `${isDeep ? 'Deep research search' : 'Ticker search'} failed: ${error.message}`;
+    box.className = 'ticker-discovery-results empty';
+    box.textContent = 'No ticker ideas loaded.';
+    state.tickerDiscoveryCandidates = [];
+  }
+}
+
+function renderTickerDiscoveryResults(candidates) {
+  const box = $('tickerDiscoveryResults');
+  if (!box) return;
+  if (!candidates.length) {
+    box.className = 'ticker-discovery-results empty';
+    box.textContent = 'No candidates found. Try a broader theme like top dividend companies, income ETFs, energy, water, AI, uranium, or cybersecurity.';
+    return;
+  }
+  box.className = 'ticker-discovery-results';
+  box.innerHTML = candidates.map((item) => `
+    <article class="ticker-card ${item.already_configured ? 'already-configured' : ''}">
+      <div class="ticker-card-head">
+        <div>
+          <strong>${escapeHtml(item.ticker)}</strong>
+          <span>${escapeHtml(item.name || item.ticker)}</span>
+        </div>
+        <em>${escapeHtml(item.asset_type || 'Unknown')}</em>
+      </div>
+      <p>${escapeHtml(item.reason || '')}</p>
+      <div class="ticker-card-meta">
+        <span>${escapeHtml(item.source || 'search')}</span>
+        ${item.confidence ? `<span>${escapeHtml(item.confidence)} confidence</span>` : ''}
+        ${item.exchange ? `<span>${escapeHtml(item.exchange)}</span>` : ''}
+      </div>
+      ${Array.isArray(item.sources) && item.sources.length ? `<div class="ticker-card-sources">${item.sources.map((source, index) => `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">Source ${index + 1}</a>`).join('')}</div>` : ''}
+      ${item.already_configured
+        ? `<button class="danger-button small" type="button" data-remove-discovery-ticker="${escapeHtml(item.ticker)}">Remove From Config</button>`
+        : `<button class="primary small" type="button" data-add-ticker="${escapeHtml(item.ticker)}">Add To Config</button>`}
+    </article>
+  `).join('');
+}
+
+async function addTickerToConfig(ticker) {
+  const status = $('tickerDiscoveryStatus');
+  status.textContent = `Adding ${ticker} to config...`;
+  try {
+    const result = await updateConfigTickers('/api/config/tickers/add', [ticker]);
+    markTickerDiscoveryCandidateTracked(ticker);
+    status.textContent = `${result.message || `Added ${ticker}.`} You can add more from the same results.`;
+    await refreshConfigAfterTickerChange();
+    renderTickerDiscoveryResults(state.tickerDiscoveryCandidates);
+  } catch (error) {
+    status.textContent = `Could not add ${ticker}: ${error.message}`;
+  }
+}
+
+function markTickerDiscoveryCandidateTracked(ticker) {
+  const normalized = String(ticker || '').trim().toUpperCase();
+  state.tickerDiscoveryCandidates = (state.tickerDiscoveryCandidates || []).map((item) => (
+    String(item.ticker || '').trim().toUpperCase() === normalized
+      ? { ...item, already_configured: true }
+      : item
+  ));
+}
+
+async function removeTickerFromConfig(ticker) {
+  const confirmed = window.confirm(`Remove ${ticker} from config.yaml? It will stop appearing in scans unless it also comes from an enabled group like sp500 or crypto_top.`);
+  if (!confirmed) return;
+  const status = $('configStatus');
+  status.textContent = `Removing ${ticker} from config...`;
+  try {
+    const result = await updateConfigTickers('/api/config/tickers/remove', [ticker]);
+    status.textContent = result.message || `Removed ${ticker}.`;
+    await refreshConfigAfterTickerChange();
+  } catch (error) {
+    status.textContent = `Could not remove ${ticker}: ${error.message}`;
+  }
+}
+
+async function removeTickerFromDiscovery(ticker) {
+  const confirmed = window.confirm(`Remove ${ticker} from config.yaml?`);
+  if (!confirmed) return;
+  const status = $('tickerDiscoveryStatus');
+  status.textContent = `Removing ${ticker} from config...`;
+  try {
+    const result = await updateConfigTickers('/api/config/tickers/remove', [ticker]);
+    markTickerDiscoveryCandidateUntracked(ticker);
+    status.textContent = `${result.message || `Removed ${ticker}.`} You can continue reviewing these results.`;
+    await refreshConfigAfterTickerChange();
+    renderTickerDiscoveryResults(state.tickerDiscoveryCandidates);
+  } catch (error) {
+    status.textContent = `Could not remove ${ticker}: ${error.message}`;
+  }
+}
+
+function markTickerDiscoveryCandidateUntracked(ticker) {
+  const normalized = String(ticker || '').trim().toUpperCase();
+  state.tickerDiscoveryCandidates = (state.tickerDiscoveryCandidates || []).map((item) => (
+    String(item.ticker || '').trim().toUpperCase() === normalized
+      ? { ...item, already_configured: false }
+      : item
+  ));
+}
+
+async function updateConfigTickers(path, tickers) {
+  const response = await api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tickers }),
+  });
+  return response.json();
+}
+
+async function refreshConfigAfterTickerChange() {
+  await loadConfig();
+  await loadConfigTickers();
+  await loadChartTickerChoices(true);
+}
+
+async function loadConfigTickers() {
+  const box = $('configTickerList');
+  if (!box) return;
+  try {
+    const data = await (await api('/api/config/tickers')).json();
+    renderConfigTickerList(data.tickers || []);
+  } catch (error) {
+    box.className = 'config-ticker-list empty';
+    box.textContent = `Could not load configured tickers: ${error.message}`;
+  }
+}
+
+function renderConfigTickerList(tickers) {
+  const box = $('configTickerList');
+  if (!box) return;
+  if (!tickers.length) {
+    box.className = 'config-ticker-list empty';
+    box.textContent = 'No manual tickers are configured.';
+    return;
+  }
+  box.className = 'config-ticker-list';
+  box.innerHTML = tickers.map((item) => `
+    <article class="config-ticker-row">
+      <div>
+        <strong>${escapeHtml(item.ticker)}</strong>
+        <span>${escapeHtml(item.name || 'No company name from latest scan yet')}</span>
+        <em>${escapeHtml(item.summary || '')}</em>
+      </div>
+      <button class="danger-button small" type="button" data-remove-ticker="${escapeHtml(item.ticker)}">Remove</button>
+    </article>
+  `).join('');
 }
 
 async function loadLlmStatus() {
@@ -2112,6 +2679,7 @@ function wireActions() {
   wireInteractiveChart();
   wireOpportunityMap();
   wireNewsAction();
+  loadGuardrailPreferences();
   $('runTrendCatcher').addEventListener('click', startTrendCatcherFromUi);
   $('resetAgent').addEventListener('click', resetAgentConversation);
   $('askAgent').addEventListener('click', askAgentQuestion);
@@ -2125,6 +2693,39 @@ function wireActions() {
   $('runScan').addEventListener('click', () => createJob({ command: 'scan', skip_fundamentals: $('scanSkipFundamentals').checked }));
   $('runBacktest').addEventListener('click', () => createJob({ command: 'backtest' }));
   $('refreshOpportunityMap').addEventListener('click', loadOpportunityMap);
+  $('refreshGuardrails').addEventListener('click', loadGuardrails);
+  ['guardrailBudget', 'riskToleranceSlider', 'timeHorizonSlider', 'fomoBrakeSlider', 'maxIdeaPctSlider'].forEach((id) => {
+    $(id).addEventListener('change', updateGuardrailPreferencesFromUi);
+    $(id).addEventListener('input', updateGuardrailPreferencesFromUi);
+  });
+  $('resetGuardrailPrefs').addEventListener('click', resetGuardrailPreferences);
+  ['guardrailResearch', 'guardrailFomo', 'guardrailSellReview', 'guardrailSleep'].forEach((id) => {
+    $(id).addEventListener('click', (event) => {
+      const target = event.target.closest('[data-ticker]');
+      if (target) selectGuardrailItem(target.dataset.ticker, target.dataset.mode);
+    });
+  });
+  $('guardrailDetail').addEventListener('input', (event) => {
+    if (event.target.id === 'guardrailNoteEditor') {
+      localStorage.setItem(event.target.dataset.noteKey, event.target.value);
+    }
+  });
+  document.body.addEventListener('click', (event) => {
+    const chartButton = event.target.closest('[data-open-chart]');
+    if (chartButton) {
+      openTickerChart(chartButton.dataset.openChart);
+      return;
+    }
+    const newsButton = event.target.closest('[data-run-news]');
+    if (newsButton) {
+      runTickerNews(newsButton.dataset.runNews);
+      return;
+    }
+    const agentButton = event.target.closest('[data-agent-research]');
+    if (agentButton) {
+      startDecisionAgent(agentButton.dataset.agentResearch);
+    }
+  });
   $('opportunityLeaderboard').addEventListener('click', (event) => {
     const target = event.target.closest('[data-ticker]');
     if (target) selectOpportunityTicker(target.dataset.ticker);
@@ -2151,6 +2752,15 @@ function wireActions() {
   });
   $('chartTicker').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') loadInteractiveChart();
+  });
+  $('chartTicker').addEventListener('input', () => {
+    syncChartTickerSelect($('chartTicker').value);
+  });
+  $('chartTickerSelect').addEventListener('change', () => {
+    const ticker = $('chartTickerSelect').value;
+    if (!ticker) return;
+    $('chartTicker').value = ticker;
+    loadInteractiveChart();
   });
   $('runChart').addEventListener('click', () => createJob({
     command: 'chart',
@@ -2179,6 +2789,22 @@ function wireActions() {
   $('runToolLlmTest').addEventListener('click', () => runLlmDiagnostic('tool'));
   $('loadConfig').addEventListener('click', loadConfig);
   $('saveConfig').addEventListener('click', saveConfig);
+  $('searchTickers').addEventListener('click', () => searchTickerDiscovery('quick'));
+  $('deepSearchTickers').addEventListener('click', () => searchTickerDiscovery('deep'));
+  $('tickerDiscoveryQuery').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') searchTickerDiscovery('quick');
+  });
+  $('refreshConfigTickers').addEventListener('click', loadConfigTickers);
+  $('tickerDiscoveryResults').addEventListener('click', (event) => {
+    const addButton = event.target.closest('[data-add-ticker]');
+    if (addButton) addTickerToConfig(addButton.dataset.addTicker);
+    const removeButton = event.target.closest('[data-remove-discovery-ticker]');
+    if (removeButton) removeTickerFromDiscovery(removeButton.dataset.removeDiscoveryTicker);
+  });
+  $('configTickerList').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-ticker]');
+    if (button) removeTickerFromConfig(button.dataset.removeTicker);
+  });
   $('shutdownServer').addEventListener('click', shutdownServer);
 }
 

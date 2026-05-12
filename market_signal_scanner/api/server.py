@@ -23,11 +23,23 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from market_signal_scanner.agent_researcher import append_agent_log_event, answer_followup, run_agent_research, sync_agent_log_llm_calls
+from market_signal_scanner.agent_researcher import (
+    AgentEvidence,
+    append_agent_log_event,
+    answer_followup,
+    call_logged_ollama,
+    current_datetime_text,
+    dedupe_evidence,
+    extractive_source_summary,
+    fetch_page_text,
+    run_agent_research,
+    search_web,
+    sync_agent_log_llm_calls,
+)
 from market_signal_scanner.charting import ChartOptions, build_interactive_chart_payload
 from market_signal_scanner.config_loader import load_config
 from market_signal_scanner.data_fetcher import Cache, fetch_price_history, validate_price_frame
-from market_signal_scanner.llm_utils import clean_llm_response
+from market_signal_scanner.llm_utils import clean_llm_response, extract_json_object
 from market_signal_scanner.trend_catcher import append_trend_catcher_log_event, run_trend_catcher
 
 
@@ -41,6 +53,15 @@ LOGGER = logging.getLogger(__name__)
 
 class SaveConfigRequest(BaseModel):
     text: str
+
+
+class TickerDiscoveryRequest(BaseModel):
+    query: str
+    max_results: int = 18
+
+
+class TickerConfigUpdateRequest(BaseModel):
+    tickers: list[str]
 
 
 class JobRequest(BaseModel):
@@ -100,6 +121,100 @@ trend_catcher_sessions: dict[str, dict[str, Any]] = {}
 trend_catcher_lock = threading.Lock()
 managed_ollama_process: Optional[subprocess.Popen[str]] = None
 llm_lock = threading.Lock()
+
+
+THEME_TICKER_CANDIDATES: dict[str, list[dict[str, str]]] = {
+    "water": [
+        {"ticker": "AWK", "name": "American Water Works", "type": "EQUITY", "reason": "Largest publicly traded U.S. water utility; often used as a direct water-infrastructure watchlist name."},
+        {"ticker": "XYL", "name": "Xylem Inc.", "type": "EQUITY", "reason": "Water technology and measurement company tied to infrastructure, utilities, and industrial water demand."},
+        {"ticker": "WTRG", "name": "Essential Utilities", "type": "EQUITY", "reason": "Regulated water and wastewater utility with defensive infrastructure exposure."},
+        {"ticker": "AWR", "name": "American States Water", "type": "EQUITY", "reason": "Long-running regulated water utility often tracked by income and defensive investors."},
+        {"ticker": "CWT", "name": "California Water Service", "type": "EQUITY", "reason": "Regional regulated water utility; useful for comparing water-utility valuations and risk."},
+        {"ticker": "PHO", "name": "Invesco Water Resources ETF", "type": "ETF", "reason": "ETF basket for U.S. water infrastructure, equipment, and utility exposure."},
+        {"ticker": "FIW", "name": "First Trust Water ETF", "type": "ETF", "reason": "Water ETF basket that can be easier to track than choosing one company."},
+        {"ticker": "CGW", "name": "Invesco S&P Global Water ETF", "type": "ETF", "reason": "Global water ETF for broader water infrastructure exposure."},
+    ],
+    "energy": [
+        {"ticker": "XOM", "name": "Exxon Mobil", "type": "EQUITY", "reason": "Large integrated energy company; useful benchmark for oil and gas exposure."},
+        {"ticker": "CVX", "name": "Chevron", "type": "EQUITY", "reason": "Large integrated energy company with dividend focus and commodity sensitivity."},
+        {"ticker": "COP", "name": "ConocoPhillips", "type": "EQUITY", "reason": "Major exploration and production name tied closely to oil and gas prices."},
+        {"ticker": "SLB", "name": "SLB", "type": "EQUITY", "reason": "Oilfield services leader; can benefit when producers increase drilling and service spending."},
+        {"ticker": "EOG", "name": "EOG Resources", "type": "EQUITY", "reason": "Large U.S. shale producer often watched for efficient oil and gas operations."},
+        {"ticker": "XLE", "name": "Energy Select Sector SPDR Fund", "type": "ETF", "reason": "Broad U.S. energy-sector ETF; simpler than picking one producer."},
+        {"ticker": "VDE", "name": "Vanguard Energy ETF", "type": "ETF", "reason": "Low-cost diversified energy ETF for sector-level tracking."},
+    ],
+    "dividend": [
+        {"ticker": "SCHD", "name": "Schwab U.S. Dividend Equity ETF", "type": "ETF", "reason": "Popular dividend-quality ETF; useful core watchlist name for income-focused investors."},
+        {"ticker": "VIG", "name": "Vanguard Dividend Appreciation ETF", "type": "ETF", "reason": "Dividend-growth ETF focused on companies with a history of raising dividends."},
+        {"ticker": "DGRO", "name": "iShares Core Dividend Growth ETF", "type": "ETF", "reason": "Broad dividend-growth ETF; useful for comparing income plus growth exposure."},
+        {"ticker": "VYM", "name": "Vanguard High Dividend Yield ETF", "type": "ETF", "reason": "High-dividend-yield ETF for diversified income exposure."},
+        {"ticker": "HDV", "name": "iShares Core High Dividend ETF", "type": "ETF", "reason": "High-dividend ETF with quality screens; useful for income-oriented watchlists."},
+        {"ticker": "NOBL", "name": "ProShares S&P 500 Dividend Aristocrats ETF", "type": "ETF", "reason": "Tracks companies with long dividend-increase histories; useful for dividend consistency research."},
+        {"ticker": "KO", "name": "Coca-Cola", "type": "EQUITY", "reason": "Classic dividend compounder candidate with durable consumer brand exposure."},
+        {"ticker": "PEP", "name": "PepsiCo", "type": "EQUITY", "reason": "Consumer staples dividend-growth name with snacks and beverages exposure."},
+        {"ticker": "PG", "name": "Procter & Gamble", "type": "EQUITY", "reason": "Defensive consumer staples dividend name often watched for stability."},
+        {"ticker": "JNJ", "name": "Johnson & Johnson", "type": "EQUITY", "reason": "Healthcare dividend name with long dividend history; useful for defensive income research."},
+        {"ticker": "ABBV", "name": "AbbVie", "type": "EQUITY", "reason": "Large pharma dividend stock; income appeal but requires pipeline and patent-risk review."},
+        {"ticker": "MCD", "name": "McDonald's", "type": "EQUITY", "reason": "Dividend-growth consumer name with global franchise exposure."},
+        {"ticker": "XOM", "name": "Exxon Mobil", "type": "EQUITY", "reason": "Energy dividend name; attractive to income investors but sensitive to commodity cycles."},
+        {"ticker": "CVX", "name": "Chevron", "type": "EQUITY", "reason": "Large energy dividend stock; useful for income plus energy-cycle exposure."},
+    ],
+    "income": [
+        {"ticker": "SCHD", "name": "Schwab U.S. Dividend Equity ETF", "type": "ETF", "reason": "Dividend-quality ETF commonly used by income-focused investors."},
+        {"ticker": "VYM", "name": "Vanguard High Dividend Yield ETF", "type": "ETF", "reason": "Diversified high-dividend ETF; useful for income comparison."},
+        {"ticker": "HDV", "name": "iShares Core High Dividend ETF", "type": "ETF", "reason": "High-dividend ETF with quality screens for income-oriented research."},
+        {"ticker": "JEPI", "name": "JPMorgan Equity Premium Income ETF", "type": "ETF", "reason": "Options-income ETF; high distributions but different risk/return profile than normal dividend stocks."},
+        {"ticker": "JEPQ", "name": "JPMorgan Nasdaq Equity Premium Income ETF", "type": "ETF", "reason": "Nasdaq-focused options-income ETF; income appeal with tech-market exposure."},
+        {"ticker": "O", "name": "Realty Income", "type": "EQUITY", "reason": "Monthly dividend REIT; useful income watchlist name but rate sensitivity matters."},
+        {"ticker": "ADC", "name": "Agree Realty", "type": "EQUITY", "reason": "Net lease REIT with dividend focus; useful comparison to Realty Income."},
+        {"ticker": "T", "name": "AT&T", "type": "EQUITY", "reason": "High-yield telecom stock; requires debt, growth, and payout sustainability review."},
+        {"ticker": "VZ", "name": "Verizon", "type": "EQUITY", "reason": "Telecom dividend stock; income appeal but slow growth and debt sensitivity matter."},
+    ],
+    "reit": [
+        {"ticker": "VNQ", "name": "Vanguard Real Estate ETF", "type": "ETF", "reason": "Broad REIT ETF; useful for tracking real estate income exposure."},
+        {"ticker": "XLRE", "name": "Real Estate Select Sector SPDR Fund", "type": "ETF", "reason": "Sector ETF for U.S. real estate equities."},
+        {"ticker": "O", "name": "Realty Income", "type": "EQUITY", "reason": "Monthly dividend net lease REIT; popular income watchlist name."},
+        {"ticker": "ADC", "name": "Agree Realty", "type": "EQUITY", "reason": "Net lease REIT with dividend focus and retail-property exposure."},
+        {"ticker": "PLD", "name": "Prologis", "type": "EQUITY", "reason": "Industrial/logistics REIT; lower yield but high-quality real estate exposure."},
+        {"ticker": "AMT", "name": "American Tower", "type": "EQUITY", "reason": "Tower REIT tied to communications infrastructure; rate sensitivity matters."},
+    ],
+    "solar": [
+        {"ticker": "FSLR", "name": "First Solar", "type": "EQUITY", "reason": "Major U.S. solar manufacturer; often sensitive to clean-energy policy and demand."},
+        {"ticker": "ENPH", "name": "Enphase Energy", "type": "EQUITY", "reason": "Solar inverter and home-energy technology name; high growth but can be volatile."},
+        {"ticker": "SEDG", "name": "SolarEdge Technologies", "type": "EQUITY", "reason": "Solar inverter company; useful for tracking solar-cycle risk and recovery."},
+        {"ticker": "TAN", "name": "Invesco Solar ETF", "type": "ETF", "reason": "Solar ETF basket for diversified exposure to the solar theme."},
+    ],
+    "nuclear": [
+        {"ticker": "CEG", "name": "Constellation Energy", "type": "EQUITY", "reason": "Large nuclear power operator; often tracked for clean baseload power demand."},
+        {"ticker": "CCJ", "name": "Cameco", "type": "EQUITY", "reason": "Major uranium producer; tied to nuclear fuel demand and uranium prices."},
+        {"ticker": "UEC", "name": "Uranium Energy", "type": "EQUITY", "reason": "Uranium miner/developer; speculative way to track uranium-cycle interest."},
+        {"ticker": "URA", "name": "Global X Uranium ETF", "type": "ETF", "reason": "Uranium and nuclear-fuel ETF; diversified way to monitor the theme."},
+        {"ticker": "URNM", "name": "Sprott Uranium Miners ETF", "type": "ETF", "reason": "Uranium miners ETF; higher-volatility basket for the nuclear-fuel theme."},
+    ],
+    "semiconductor": [
+        {"ticker": "NVDA", "name": "NVIDIA", "type": "EQUITY", "reason": "AI accelerator leader; central ticker for AI infrastructure sentiment."},
+        {"ticker": "AMD", "name": "Advanced Micro Devices", "type": "EQUITY", "reason": "CPU/GPU competitor watched for AI, data center, and PC cycles."},
+        {"ticker": "AVGO", "name": "Broadcom", "type": "EQUITY", "reason": "Semiconductor and infrastructure software name tied to AI networking and custom silicon."},
+        {"ticker": "TSM", "name": "Taiwan Semiconductor", "type": "EQUITY", "reason": "Leading chip foundry; important read-through for global semiconductor demand."},
+        {"ticker": "SMH", "name": "VanEck Semiconductor ETF", "type": "ETF", "reason": "Semiconductor ETF; useful diversified benchmark for the chip theme."},
+        {"ticker": "SOXX", "name": "iShares Semiconductor ETF", "type": "ETF", "reason": "Broad semiconductor ETF for tracking the sector without single-stock concentration."},
+    ],
+    "ai": [
+        {"ticker": "NVDA", "name": "NVIDIA", "type": "EQUITY", "reason": "Core AI infrastructure name; often drives AI-market sentiment."},
+        {"ticker": "MSFT", "name": "Microsoft", "type": "EQUITY", "reason": "Large AI platform and cloud name with enterprise distribution."},
+        {"ticker": "GOOGL", "name": "Alphabet", "type": "EQUITY", "reason": "AI model, search, cloud, and advertising exposure in one large-cap name."},
+        {"ticker": "AMZN", "name": "Amazon", "type": "EQUITY", "reason": "AWS cloud and AI infrastructure exposure plus large consumer platform."},
+        {"ticker": "META", "name": "Meta Platforms", "type": "EQUITY", "reason": "AI-driven advertising, recommendation systems, and open model investments."},
+        {"ticker": "BOTZ", "name": "Global X Robotics & Artificial Intelligence ETF", "type": "ETF", "reason": "ETF basket for AI and robotics exposure."},
+    ],
+    "cybersecurity": [
+        {"ticker": "CRWD", "name": "CrowdStrike", "type": "EQUITY", "reason": "Endpoint and cloud security leader; high-growth cybersecurity benchmark."},
+        {"ticker": "PANW", "name": "Palo Alto Networks", "type": "EQUITY", "reason": "Large cybersecurity platform company with broad enterprise exposure."},
+        {"ticker": "ZS", "name": "Zscaler", "type": "EQUITY", "reason": "Zero-trust and cloud security name; often volatile but theme-relevant."},
+        {"ticker": "HACK", "name": "Amplify Cybersecurity ETF", "type": "ETF", "reason": "Cybersecurity ETF basket for diversified theme tracking."},
+        {"ticker": "CIBR", "name": "First Trust Nasdaq Cybersecurity ETF", "type": "ETF", "reason": "Cybersecurity ETF with broad public-company exposure."},
+    ],
+}
 
 
 THEME_COLORS: dict[str, dict[str, str]] = {
@@ -647,6 +762,151 @@ def get_agent_suggested_questions() -> dict[str, Any]:
     return {"questions": config.agent.suggested_questions}
 
 
+@app.get("/api/chart/tickers")
+def get_chart_tickers() -> dict[str, Any]:
+    config = load_config(CONFIG_PATH)
+    configured = [ticker for ticker in config.tickers if ticker]
+    latest_scan: list[str] = []
+    latest_scan_run = None
+    try:
+        latest_scan_run, rows = latest_scan_signal_rows()
+        latest_scan = [str(row.get("ticker") or "").strip().upper() for row in rows if row.get("ticker")]
+    except HTTPException:
+        latest_scan = []
+    tickers = dedupe_strings([*configured, *latest_scan])
+    return {
+        "tickers": tickers,
+        "configured": configured,
+        "latest_scan": latest_scan,
+        "latest_scan_run": latest_scan_run,
+    }
+
+
+@app.get("/api/config/tickers")
+def get_config_tickers() -> dict[str, Any]:
+    config = load_config(CONFIG_PATH)
+    details = latest_scan_details_by_ticker()
+    tickers = []
+    for ticker in config.tickers:
+        row = details.get(ticker, {})
+        tickers.append({
+            "ticker": ticker,
+            "name": row.get("name") or "",
+            "score": row.get("score"),
+            "recommendation": row.get("recommendation") or "",
+            "last_price": row.get("last_price"),
+            "summary": configured_ticker_summary(row),
+        })
+    return {"tickers": tickers, "count": len(tickers)}
+
+
+@app.post("/api/ticker-discovery")
+def discover_tickers(request: TickerDiscoveryRequest) -> dict[str, Any]:
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Enter a theme or search phrase.")
+    max_results = max(1, min(40, request.max_results))
+    config = load_config(CONFIG_PATH)
+    existing = set(config.tickers)
+    candidates = ticker_theme_candidates(query) + yahoo_ticker_search(query, max_results=max_results)
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        ticker = normalize_config_ticker(candidate.get("ticker", ""))
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+        deduped.append({
+            "ticker": ticker,
+            "name": candidate.get("name") or ticker,
+            "asset_type": candidate.get("asset_type") or candidate.get("type") or "Unknown",
+            "exchange": candidate.get("exchange") or "",
+            "source": candidate.get("source") or "search",
+            "reason": candidate.get("reason") or f"Matched the search theme '{query}'. Research before adding.",
+            "already_configured": ticker in existing,
+        })
+        if len(deduped) >= max_results:
+            break
+    return {
+        "query": query,
+        "count": len(deduped),
+        "candidates": deduped,
+        "note": "Search results are watchlist ideas only. Run Scanner, News Summary, or Agent before investing.",
+    }
+
+
+@app.post("/api/ticker-discovery/deep")
+def deep_discover_tickers(request: TickerDiscoveryRequest) -> dict[str, Any]:
+    query = request.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Enter a theme or search phrase.")
+    max_results = max(1, min(24, request.max_results))
+    config = load_config(CONFIG_PATH)
+    evidence = collect_ticker_discovery_evidence(query, config)
+    if not evidence:
+        return {
+            "query": query,
+            "count": 0,
+            "candidates": [],
+            "note": "Deep search did not fetch usable source evidence. Try a shorter phrase or check internet access.",
+        }
+    prompt = build_deep_ticker_discovery_prompt(query, evidence, max_results)
+    state: dict[str, Any] = {"llm_calls": []}
+    try:
+        response = call_logged_ollama(config.agent, prompt, state, "deep_ticker_discovery")
+        parsed = json.loads(extract_json_object(response))
+    except Exception as exc:
+        LOGGER.warning("Deep ticker discovery LLM extraction failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Deep research search fetched sources but could not extract tickers with the configured LLM: {exc}") from exc
+    config_tickers = set(config.tickers)
+    candidates = normalize_deep_ticker_candidates(parsed.get("candidates", []), config_tickers, evidence, max_results)
+    return {
+        "query": query,
+        "count": len(candidates),
+        "candidates": candidates,
+        "sources_reviewed": len(evidence),
+        "note": "Deep results are source-grounded watchlist ideas. Verify the business, ticker, and liquidity before adding.",
+    }
+
+
+@app.post("/api/config/tickers/add")
+def add_config_tickers(request: TickerConfigUpdateRequest) -> dict[str, Any]:
+    requested = [normalize_config_ticker(ticker) for ticker in request.tickers]
+    requested = dedupe_strings([ticker for ticker in requested if ticker])
+    if not requested:
+        raise HTTPException(status_code=400, detail="No tickers provided.")
+    text = CONFIG_PATH.read_text(encoding="utf-8")
+    config = load_config(CONFIG_PATH)
+    existing = set(config.tickers)
+    additions = [ticker for ticker in requested if ticker not in existing]
+    if additions:
+        text = add_tickers_to_config_text(text, additions)
+        CONFIG_PATH.write_text(text, encoding="utf-8")
+    return {
+        "ok": True,
+        "added": additions,
+        "skipped_existing": [ticker for ticker in requested if ticker in existing],
+        "message": f"Added {len(additions)} ticker(s)." if additions else "All selected tickers were already in config.",
+    }
+
+
+@app.post("/api/config/tickers/remove")
+def remove_config_tickers(request: TickerConfigUpdateRequest) -> dict[str, Any]:
+    requested = dedupe_strings([normalize_config_ticker(ticker) for ticker in request.tickers if ticker])
+    if not requested:
+        raise HTTPException(status_code=400, detail="No tickers provided.")
+    text = CONFIG_PATH.read_text(encoding="utf-8")
+    updated_text, removed = remove_tickers_from_config_text(text, set(requested))
+    if removed:
+        CONFIG_PATH.write_text(updated_text, encoding="utf-8")
+    return {
+        "ok": True,
+        "removed": removed,
+        "not_found": [ticker for ticker in requested if ticker not in set(removed)],
+        "message": f"Removed {len(removed)} ticker(s)." if removed else "No selected tickers were found in config.",
+    }
+
+
 @app.post("/api/config")
 def save_config(request: SaveConfigRequest) -> dict[str, Any]:
     CONFIG_PATH.write_text(request.text, encoding="utf-8")
@@ -726,6 +986,62 @@ def load_chart_cache_fallback(cache: Cache, ticker: str, interval: str, period: 
 
 @app.get("/api/opportunity-map")
 def opportunity_map_data() -> dict[str, Any]:
+    run_id, rows = latest_scan_signal_rows()
+    return {
+        "run_id": run_id,
+        "row_count": len(rows),
+        "summary": opportunity_summary(rows),
+        "rows": rows,
+    }
+
+
+@app.get("/api/investor-guardrails")
+def investor_guardrails_data() -> dict[str, Any]:
+    run_id, rows = latest_scan_signal_rows()
+    research = sorted(
+        [row for row in rows if is_research_candidate(row)],
+        key=lambda item: numeric_value(item.get("opportunity")),
+        reverse=True,
+    )[:20]
+    fomo = sorted(
+        [guardrail_item(row, "fomo") for row in rows if fomo_score(row) >= 35],
+        key=lambda item: numeric_value(item.get("alert_score")),
+        reverse=True,
+    )[:20]
+    sell_review = sorted(
+        [guardrail_item(row, "sell_review") for row in rows if sell_review_score(row) >= 35],
+        key=lambda item: numeric_value(item.get("alert_score")),
+        reverse=True,
+    )[:20]
+    sleep_list = sorted(
+        [guardrail_item(row, "sleep_on_it") for row in rows if sleep_on_it_score(row) >= 35],
+        key=lambda item: numeric_value(item.get("alert_score")),
+        reverse=True,
+    )[:20]
+    return {
+        "run_id": run_id,
+        "row_count": len(rows),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "summary": {
+            "research_count": len(research),
+            "fomo_count": len(fomo),
+            "sell_review_count": len(sell_review),
+            "sleep_on_it_count": len(sleep_list),
+        },
+        "research": [guardrail_item(row, "research") for row in research],
+        "fomo": fomo,
+        "sell_review": sell_review,
+        "sleep_on_it": sleep_list,
+        "principles": [
+            "Use the map to decide what deserves research, not to force a trade.",
+            "Avoid buying immediately after a large move unless the thesis still works at the new price.",
+            "For small long-term accounts, starter positions and dollar-cost averaging are usually safer than all-in entries.",
+            "A sell review is not an automatic sell; it is a prompt to check whether the original thesis is broken.",
+        ],
+    }
+
+
+def latest_scan_signal_rows() -> tuple[str, list[dict[str, Any]]]:
     run_dir = newest_run("scans")
     if run_dir is None:
         raise HTTPException(status_code=404, detail="No scan runs found. Run a current scan first.")
@@ -739,12 +1055,309 @@ def opportunity_map_data() -> dict[str, Any]:
             rows.append(normalize_opportunity_row(raw))
     rows = [row for row in rows if row.get("ticker")]
     rows.sort(key=lambda item: numeric_value(item.get("score")), reverse=True)
-    return {
-        "run_id": run_dir.name,
-        "row_count": len(rows),
-        "summary": opportunity_summary(rows),
-        "rows": rows,
+    return run_dir.name, rows
+
+
+def dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        cleaned = str(value or "").strip().upper()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result
+
+
+def latest_scan_details_by_ticker() -> dict[str, dict[str, Any]]:
+    try:
+        _, rows = latest_scan_signal_rows()
+    except HTTPException:
+        return {}
+    return {str(row.get("ticker") or "").upper(): row for row in rows}
+
+
+def configured_ticker_summary(row: dict[str, Any]) -> str:
+    if not row:
+        return "Configured manually; run Scanner to see score, recommendation, and current signals."
+    score = row.get("score")
+    recommendation = row.get("recommendation") or "n/a"
+    risk = row.get("risk")
+    parts = [f"Latest scan: {recommendation}"]
+    if score is not None:
+        parts.append(f"score {score:.1f}" if isinstance(score, (int, float)) else f"score {score}")
+    if risk is not None:
+        parts.append(f"risk {risk:.1f}" if isinstance(risk, (int, float)) else f"risk {risk}")
+    return ", ".join(parts) + "."
+
+
+def ticker_theme_candidates(query: str) -> list[dict[str, str]]:
+    query_lower = query.lower()
+    matches: list[dict[str, str]] = []
+    aliases = {
+        "top dividend": "dividend",
+        "dividend companies": "dividend",
+        "dividend stocks": "dividend",
+        "dividend growth": "dividend",
+        "high dividend": "dividend",
+        "yield": "income",
+        "monthly dividend": "income",
+        "income etf": "income",
+        "income stocks": "income",
+        "real estate": "reit",
+        "reits": "reit",
     }
+    matched_themes = set()
+    for theme, candidates in THEME_TICKER_CANDIDATES.items():
+        if theme in query_lower or query_lower in theme:
+            matched_themes.add(theme)
+    for phrase, theme in aliases.items():
+        if phrase in query_lower:
+            matched_themes.add(theme)
+    for theme in matched_themes:
+        candidates = THEME_TICKER_CANDIDATES.get(theme, [])
+        for candidate in candidates:
+            matches.append(candidate | {"source": f"built-in {theme} theme"})
+    return matches
+
+
+def yahoo_ticker_search(query: str, max_results: int = 18) -> list[dict[str, str]]:
+    try:
+        response = requests.get(
+            "https://query1.finance.yahoo.com/v1/finance/search",
+            params={"q": query, "quotesCount": max_results, "newsCount": 0, "listsCount": 0},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=8,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        LOGGER.warning("Ticker discovery search failed for %s: %s", query, exc)
+        return []
+    candidates: list[dict[str, str]] = []
+    allowed_types = {"EQUITY", "ETF"}
+    for quote in payload.get("quotes", []):
+        quote_type = str(quote.get("quoteType") or "").upper()
+        raw_symbol = str(quote.get("symbol") or "").strip()
+        exchange = quote.get("exchange") or quote.get("exchDisp") or ""
+        symbol = normalize_config_ticker(raw_symbol)
+        if not symbol or quote_type not in allowed_types or not is_us_market_ticker(raw_symbol, exchange):
+            continue
+        name = quote.get("shortname") or quote.get("longname") or symbol
+        candidates.append({
+            "ticker": symbol,
+            "name": str(name),
+            "asset_type": quote_type.title(),
+            "exchange": str(exchange),
+            "source": "Yahoo Finance search",
+            "reason": f"Yahoo Finance matched this ticker to the search phrase '{query}'. Use it as a watchlist idea, then verify with Scanner/Agent.",
+        })
+    return candidates
+
+
+def collect_ticker_discovery_evidence(query: str, config: Any) -> list[AgentEvidence]:
+    searches = [
+        f"{query} public companies stock ticker",
+        f"{query} listed companies suppliers stock market",
+        f"{query} market leaders public company ticker",
+        f"{query} ETF holdings stocks",
+    ]
+    evidence: list[AgentEvidence] = []
+    for search_query in searches[: max(2, min(4, config.agent.max_search_queries))]:
+        results, _note = search_web(
+            search_query,
+            limit=min(4, config.agent.search_results_per_query),
+            region=config.agent.search_region,
+            ticker="",
+        )
+        evidence.extend(results)
+    evidence = dedupe_evidence(evidence)[:8]
+    for item in evidence:
+        fetched = fetch_page_text(item.url, max_chars=min(5000, config.agent.max_page_chars))
+        item.content = fetched.text
+        item.fetched_at = current_datetime_text()
+        if fetched.published_at and not item.published_at:
+            item.published_at = fetched.published_at
+        if not item.content and item.snippet:
+            item.content = item.snippet
+        if item.content:
+            item.summary = extractive_source_summary(item.content, max_chars=900)
+    return [item for item in evidence if item.summary or item.content or item.snippet]
+
+
+def build_deep_ticker_discovery_prompt(query: str, evidence: list[AgentEvidence], max_results: int) -> str:
+    sources = []
+    for index, item in enumerate(evidence, start=1):
+        text = item.summary or item.snippet or extractive_source_summary(item.content, max_chars=700)
+        sources.append(
+            f"[{index}] {item.title}\n"
+            f"URL: {item.url}\n"
+            f"Published: {item.published_at or 'unknown'}\n"
+            f"Search query: {item.query}\n"
+            f"Text: {text[:1200]}"
+        )
+    return f"""
+You are helping build a stock/ETF watchlist from web evidence.
+
+Current date/time: {current_datetime_text()}
+User search phrase: {query}
+
+Task:
+Extract up to {max_results} publicly traded companies or ETFs that are relevant to the phrase.
+
+Rules:
+- Return ONLY valid JSON.
+- Do not recommend buying. These are watchlist candidates only.
+- Prefer U.S.-tradable ticker symbols when clear.
+- Only include tickers traded on U.S. markets such as NYSE, Nasdaq, NYSE Arca, NYSE American, BATS, or U.S. OTC.
+- Exclude tickers from non-U.S. exchanges such as .TO, .AX, .L, .HK, .T, .NS, .PA, .DE, and similar suffixes.
+- Do not include private companies unless there is a public parent company ticker.
+- Do not invent tickers. If the source does not support a ticker, omit it.
+- Each candidate must have a source-grounded one-sentence reason.
+- Confidence should be High, Medium, or Low based on how directly sources connect the company to the theme.
+- Include source indexes used, matching the source numbers below.
+
+JSON schema:
+{{
+  "candidates": [
+    {{
+      "ticker": "TICKER",
+      "name": "Company or ETF name",
+      "asset_type": "Equity or ETF",
+      "reason": "One concise reason this belongs on the watchlist for the user's phrase.",
+      "confidence": "High",
+      "source_indexes": [1, 2]
+    }}
+  ]
+}}
+
+Sources:
+{chr(10).join(sources)}
+""".strip()
+
+
+def normalize_deep_ticker_candidates(candidates: Any, configured: set[str], evidence: list[AgentEvidence], max_results: int) -> list[dict[str, Any]]:
+    if not isinstance(candidates, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        ticker = normalize_config_ticker(item.get("ticker") or "")
+        if not ticker or ticker in seen or len(ticker) > 15 or not is_us_market_ticker(ticker, ""):
+            continue
+        seen.add(ticker)
+        source_indexes = item.get("source_indexes") if isinstance(item.get("source_indexes"), list) else []
+        sources = []
+        for index in source_indexes[:4]:
+            try:
+                source = evidence[int(index) - 1]
+            except Exception:
+                continue
+            sources.append({"title": source.title, "url": source.url})
+        normalized.append({
+            "ticker": ticker,
+            "name": str(item.get("name") or ticker),
+            "asset_type": str(item.get("asset_type") or "Unknown"),
+            "exchange": "",
+            "source": "Deep research",
+            "reason": str(item.get("reason") or "Source-grounded match for the search phrase."),
+            "confidence": str(item.get("confidence") or "Medium"),
+            "sources": sources,
+            "already_configured": ticker in configured,
+        })
+        if len(normalized) >= max_results:
+            break
+    return normalized
+
+
+def normalize_config_ticker(ticker: Any) -> str:
+    return str(ticker or "").strip().upper().replace(".", "-")
+
+
+def is_us_market_ticker(ticker: Any, exchange: Any = "") -> bool:
+    raw = str(ticker or "").strip().upper()
+    normalized = normalize_config_ticker(raw)
+    if not normalized:
+        return False
+    non_us_suffixes = (
+        ".TO", ".V", ".CN", ".NE", ".AX", ".L", ".PA", ".DE", ".F", ".MI", ".AS", ".BR",
+        ".SW", ".ST", ".OL", ".HE", ".CO", ".HK", ".SS", ".SZ", ".T", ".KS", ".KQ", ".SI",
+        ".NS", ".BO", ".SA", ".MX", ".JO", ".NZ", ".TW", ".TWO", ".IR", ".IS",
+        "-TO", "-V", "-CN", "-NE", "-AX", "-L", "-PA", "-DE", "-F", "-MI", "-AS", "-BR",
+        "-SW", "-ST", "-OL", "-HE", "-CO", "-HK", "-SS", "-SZ", "-T", "-KS", "-KQ", "-SI",
+        "-NS", "-BO", "-SA", "-MX", "-JO", "-NZ", "-TW", "-TWO", "-IR", "-IS",
+    )
+    if raw.endswith(non_us_suffixes) or normalized.endswith(non_us_suffixes):
+        return False
+    allowed_exchanges = {
+        "",
+        "ASE", "NMS", "NYQ", "NGM", "NCM", "PCX", "BTS", "PNK", "NYS", "NAS", "NASDAQ",
+        "NYSE", "NYSEARCA", "NYSE AMERICAN", "BATS", "OTC", "OTC MARKETS",
+    }
+    exchange_text = str(exchange or "").strip().upper()
+    if exchange_text and exchange_text not in allowed_exchanges:
+        return False
+    return True
+
+
+def ticker_block_bounds(lines: list[str]) -> tuple[int, int]:
+    start = next((index for index, line in enumerate(lines) if line.strip() == "tickers:"), None)
+    if start is None:
+        raise HTTPException(status_code=400, detail="Could not find top-level tickers: section in config.yaml")
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line and not line.startswith((" ", "\t", "#")) and line.strip().endswith(":"):
+            end = index
+            break
+    return start, end
+
+
+def add_tickers_to_config_text(text: str, tickers: list[str]) -> str:
+    lines = text.splitlines()
+    start, end = ticker_block_bounds(lines)
+    insert_at = start + 1
+    has_discovery_section = False
+    for index in range(start + 1, end):
+        if lines[index].strip() == "# Added from GUI ticker discovery":
+            has_discovery_section = True
+        if lines[index].strip().startswith("- "):
+            insert_at = index + 1
+
+    insert_lines = []
+    if not has_discovery_section:
+        if insert_at > 0 and lines[insert_at - 1].strip():
+            insert_lines.append("")
+        insert_lines.append("  # Added from GUI ticker discovery")
+    insert_lines.extend([f"  - {ticker}" for ticker in tickers])
+    lines[insert_at:insert_at] = insert_lines
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def remove_tickers_from_config_text(text: str, tickers: set[str]) -> tuple[str, list[str]]:
+    lines = text.splitlines()
+    start, end = ticker_block_bounds(lines)
+    removed: list[str] = []
+    kept = list(lines)
+    for index in range(end - 1, start, -1):
+        line = kept[index]
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            continue
+        ticker = normalize_config_ticker(stripped[2:].split("#", 1)[0].strip())
+        if ticker in tickers:
+            removed.append(ticker)
+            del kept[index]
+    for index in range(len(kept) - 1, start, -1):
+        if kept[index].strip() != "# Added from GUI ticker discovery":
+            continue
+        next_content = next((kept[next_index].strip() for next_index in range(index + 1, len(kept)) if kept[next_index].strip()), "")
+        if not next_content.startswith("- "):
+            del kept[index]
+    removed.reverse()
+    return "\n".join(kept).rstrip() + "\n", removed
 
 
 def normalize_opportunity_row(raw: dict[str, str]) -> dict[str, Any]:
@@ -771,6 +1384,16 @@ def normalize_opportunity_row(raw: dict[str, str]) -> dict[str, Any]:
         "valuation_score",
         "quality_score",
         "score",
+        "price_vs_sma_50",
+        "price_vs_sma_200",
+        "trailing_pe",
+        "forward_pe",
+        "peg_ratio",
+        "price_to_book",
+        "revenue_growth",
+        "earnings_growth",
+        "profit_margin",
+        "dividend_yield",
     ]
     row: dict[str, Any] = {
         "ticker": ticker,
@@ -782,6 +1405,8 @@ def normalize_opportunity_row(raw: dict[str, str]) -> dict[str, Any]:
     }
     for field in numeric_fields:
         row[field] = parse_float(raw.get(field))
+    for field in ("golden_cross", "death_cross", "macd_bullish"):
+        row[field] = parse_bool(raw.get(field))
     row["risk"] = opportunity_risk(row)
     row["opportunity"] = opportunity_quality(row)
     row["quadrant"] = opportunity_quadrant(row)
@@ -798,6 +1423,10 @@ def parse_float(value: Any) -> Optional[float]:
     if number != number:
         return None
     return number
+
+
+def parse_bool(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
 
 
 def numeric_value(value: Any, default: float = -9999.0) -> float:
@@ -861,6 +1490,153 @@ def opportunity_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "quadrants": quadrant_counts,
         "top_opportunities": rows[:10],
     }
+
+
+def is_research_candidate(row: dict[str, Any]) -> bool:
+    return (
+        str(row.get("recommendation")) in {"Strong Buy", "Buy"}
+        and numeric_value(row.get("score"), 0.0) >= 40
+        and numeric_value(row.get("opportunity"), 0.0) >= 28
+        and numeric_value(row.get("risk"), 100.0) <= 62
+        and numeric_value(row.get("rsi_14"), 50.0) <= 74
+    )
+
+
+def fomo_score(row: dict[str, Any]) -> float:
+    score = 0.0
+    score += max(0.0, numeric_value(row.get("return_5d"), 0.0) - 0.05) * 420
+    score += max(0.0, numeric_value(row.get("return_1m"), 0.0) - 0.12) * 180
+    score += max(0.0, numeric_value(row.get("rsi_14"), 50.0) - 68) * 2.4
+    score += max(0.0, numeric_value(row.get("volume_spike"), 1.0) - 1.5) * 14
+    score += max(0.0, numeric_value(row.get("risk"), 0.0) - 40) * 0.55
+    score -= max(0.0, numeric_value(row.get("score"), 0.0) - 50) * 0.18
+    return round(max(0.0, min(100.0, score)), 2)
+
+
+def sell_review_score(row: dict[str, Any]) -> float:
+    score = 0.0
+    recommendation = str(row.get("recommendation") or "")
+    if recommendation == "Strong Sell":
+        score += 45
+    elif recommendation == "Sell":
+        score += 32
+    score += max(0.0, -numeric_value(row.get("score"), 0.0)) * 0.75
+    score += max(0.0, -numeric_value(row.get("return_3m"), 0.0) - 0.10) * 140
+    score += max(0.0, -numeric_value(row.get("price_vs_sma_200"), 0.0) - 0.05) * 160
+    score += max(0.0, abs(numeric_value(row.get("max_drawdown"), 0.0)) - 0.30) * 80
+    if row.get("death_cross"):
+        score += 18
+    return round(max(0.0, min(100.0, score)), 2)
+
+
+def sleep_on_it_score(row: dict[str, Any]) -> float:
+    score = fomo_score(row) * 0.65
+    score += max(0.0, numeric_value(row.get("risk"), 0.0) - 55) * 0.7
+    score += max(0.0, numeric_value(row.get("rsi_14"), 50.0) - 75) * 1.8
+    score += max(0.0, numeric_value(row.get("score"), 0.0) - 60) * 0.25
+    return round(max(0.0, min(100.0, score)), 2)
+
+
+def guardrail_item(row: dict[str, Any], mode: str) -> dict[str, Any]:
+    reasons = guardrail_reasons(row, mode)
+    alert_score = {
+        "fomo": fomo_score,
+        "sell_review": sell_review_score,
+        "sleep_on_it": sleep_on_it_score,
+    }.get(mode, lambda item: numeric_value(item.get("opportunity"), 0.0))(row)
+    return {
+        "ticker": row.get("ticker"),
+        "name": row.get("name"),
+        "asset_type": row.get("asset_type"),
+        "recommendation": row.get("recommendation"),
+        "score": row.get("score"),
+        "opportunity": row.get("opportunity"),
+        "risk": row.get("risk"),
+        "rsi_14": row.get("rsi_14"),
+        "return_5d": row.get("return_5d"),
+        "return_1m": row.get("return_1m"),
+        "return_3m": row.get("return_3m"),
+        "return_1y": row.get("return_1y"),
+        "max_drawdown": row.get("max_drawdown"),
+        "volume_spike": row.get("volume_spike"),
+        "alert_score": alert_score,
+        "posture": guardrail_posture(row, mode),
+        "reasons": reasons,
+        "checklist": due_diligence_checklist(row, mode),
+        "links": {
+            "yahoo": row.get("yahoo_finance_url"),
+            "tradingview": row.get("tradingview_url"),
+        },
+    }
+
+
+def guardrail_reasons(row: dict[str, Any], mode: str) -> list[str]:
+    reasons: list[str] = []
+    if mode in {"fomo", "sleep_on_it"}:
+        if numeric_value(row.get("return_5d"), 0.0) >= 0.08:
+            reasons.append(f"5D move is {numeric_value(row.get('return_5d'), 0.0) * 100:.1f}%, so chasing risk is elevated.")
+        if numeric_value(row.get("return_1m"), 0.0) >= 0.18:
+            reasons.append(f"1M move is {numeric_value(row.get('return_1m'), 0.0) * 100:.1f}%, which may already price in good news.")
+        if numeric_value(row.get("rsi_14"), 50.0) >= 70:
+            reasons.append(f"RSI is {numeric_value(row.get('rsi_14'), 0.0):.1f}, so the asset may be overbought.")
+        if numeric_value(row.get("volume_spike"), 1.0) >= 1.8:
+            reasons.append(f"Volume is {numeric_value(row.get('volume_spike'), 1.0):.1f}x normal, often a sign of crowded attention.")
+    if mode == "sell_review":
+        if str(row.get("recommendation")) in {"Sell", "Strong Sell"}:
+            reasons.append(f"Scanner recommendation is {row.get('recommendation')}.")
+        if numeric_value(row.get("score"), 0.0) < 0:
+            reasons.append(f"Score is {numeric_value(row.get('score'), 0.0):.1f}, below the neutral zone.")
+        if row.get("death_cross"):
+            reasons.append("Death cross is active.")
+        if numeric_value(row.get("price_vs_sma_200"), 0.0) < -0.08:
+            reasons.append("Price is materially below the 200-day moving average.")
+        if numeric_value(row.get("return_3m"), 0.0) < -0.12:
+            reasons.append(f"3M return is {numeric_value(row.get('return_3m'), 0.0) * 100:.1f}%.")
+    if mode == "research":
+        reasons.append(f"Score is {numeric_value(row.get('score'), 0.0):.1f} with {row.get('recommendation')} rating.")
+        reasons.append(f"Risk composite is {numeric_value(row.get('risk'), 0.0):.1f}, which is acceptable relative to the score.")
+        if row.get("golden_cross"):
+            reasons.append("Golden cross is active.")
+        if numeric_value(row.get("quality_score"), 0.0) > 0:
+            reasons.append("Quality score contributes positively.")
+    return reasons[:5] or ["No single red flag dominates; review the full thesis before acting."]
+
+
+def guardrail_posture(row: dict[str, Any], mode: str) -> str:
+    if mode == "research":
+        return "Research calmly; consider a starter only after thesis and valuation checks."
+    if mode == "fomo":
+        return "Do not chase; wait for pullback, consolidation, or a fresh researched thesis."
+    if mode == "sell_review":
+        return "Review existing exposure; decide whether the original thesis is still valid."
+    return "Sleep on it; use a limit, small size, or no trade until the setup cools."
+
+
+def due_diligence_checklist(row: dict[str, Any], mode: str) -> list[str]:
+    base = [
+        "Write the one-sentence thesis before buying or selling.",
+        "Check whether the catalyst is durable or already priced in.",
+        "Compare valuation against growth, margins, and balance-sheet risk.",
+        "Decide the invalidation point before entering.",
+        "Use starter sizing if conviction is not yet high.",
+    ]
+    if mode == "sell_review":
+        return [
+            "Compare the original buy thesis with the current facts.",
+            "Separate price pain from business deterioration.",
+            "Check whether risk is concentrated too heavily in one theme.",
+            "Define what evidence would make you hold, trim, or exit.",
+            "Avoid revenge trading after selling.",
+        ]
+    if mode in {"fomo", "sleep_on_it"}:
+        return [
+            "Wait 24 hours before buying unless you already researched it.",
+            "Check if the move came from real fundamentals or attention only.",
+            "Look for a lower-risk entry near support or after consolidation.",
+            "Limit starter size and avoid averaging up blindly.",
+            "Write what would make this trade a mistake.",
+        ]
+    return base
 
 
 @app.get("/api/runs")
@@ -1526,7 +2302,12 @@ def get_llm_status() -> dict[str, Any]:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run("market_signal_scanner.api.server:app", host="127.0.0.1", port=8000, reload=False)
+    host = os.environ.get("MARKET_SIGNAL_HOST", "127.0.0.1")
+    try:
+        port = int(os.environ.get("MARKET_SIGNAL_PORT", "8000"))
+    except ValueError:
+        port = 8000
+    uvicorn.run("market_signal_scanner.api.server:app", host=host, port=port, reload=False)
 
 
 if __name__ == "__main__":

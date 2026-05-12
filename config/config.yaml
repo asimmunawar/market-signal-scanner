@@ -65,7 +65,6 @@ tickers:
   - BA
   - GE
   - DE
-  - LMT
   - RTX
 
   # -------------------------
@@ -124,6 +123,12 @@ tickers:
   - AVAX-USD
   - DOT-USD
   - MATIC-USD
+
+  # Added from GUI ticker discovery
+  - HLAL
+  - SPUS
+  - WAHD
+  - AMJ
 
 # Optional universe expansion. These add tickers on top of the manual tickers above.
 # true = include that group, false = ignore it.

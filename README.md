@@ -1,6 +1,6 @@
 # market-signal-scanner
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Local First](https://img.shields.io/badge/Local--First-Ollama%20Ready-111827)](#llm-and-local-ai)
 [![FastAPI](https://img.shields.io/badge/FastAPI-GUI-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
@@ -11,6 +11,8 @@
 `market-signal-scanner` helps you turn a configurable ticker universe into ranked market signals, reports, technical charts, backtests, and LLM-assisted research. It runs locally, writes transparent CSV/Markdown outputs, and includes **Trend Catcher**, a broad-market mode designed to look for fresh market trends before they become obvious.
 
 > Educational and analytical software only. Not financial advice, investment advice, or a trading recommendation.
+
+The product philosophy is simple: help small long-term investors slow down, research first, avoid FOMO, size positions modestly, and review weak holdings before mistakes compound.
 
 ## Why It Exists
 
@@ -34,7 +36,10 @@ It combines deterministic quant-style signals with local AI research so the outp
 - **Technical indicators**: returns, volatility, drawdown, SMA/EMA, RSI, MACD, stochastic, volume spikes
 - **Optional fundamentals**: market cap, P/E, PEG, price/book, growth, margin, debt/equity, FCF, dividend yield
 - **Backtesting** with contributions, rebalancing, transaction costs, slippage, and benchmark comparison
-- **Charting** with candles, moving averages, Bollinger bands, support/resistance, trendlines, RSI, MACD, and volume
+- **Opportunity Map** to visualize score versus risk, momentum rotation, and best/worst candidates
+- **Decision Guardrails** to flag FOMO risk, sell-review names, research candidates, sleep-on-it setups, starter sizing, and local decision notes
+- **Ticker Discovery** for finding U.S.-listed stock/ETF watchlist ideas from plain-English themes
+- **Interactive Charting** with candles, moving averages, Bollinger bands, support/resistance, trendlines, RSI, MACD, volume, range controls, box zoom, and a ticker picker
 - **News Summary** for ticker-level source-grounded summaries
 - **Agent Research** with LangGraph/ReAct-style web research and follow-up Q&A
 - **Trend Catcher** for early market trend discovery across news, viral narratives, catalysts, price action, and attention shifts
@@ -46,6 +51,9 @@ It combines deterministic quant-style signals with local AI research so the outp
 | Workflow | What It Does | Output Folder |
 |---|---|---|
 | Scan | Ranks configured tickers by technical, risk, valuation, and quality signals | `output/scans/` |
+| Opportunity Map | Visualizes latest scan output as risk/reward, leaderboard, and heatmap views | latest `output/scans/` |
+| Decision Guardrails | Converts latest scan output into FOMO, research, sell-review, and sizing prompts | latest `output/scans/` |
+| Ticker Discovery | Searches plain-English themes and helps add/remove U.S. stocks and ETFs from config | `config/config.yaml` |
 | Backtest | Simulates how the scoring system would have behaved historically | `output/backtests/` |
 | Chart | Generates marked-up technical charts and chart reports | `output/charts/` |
 | News | Summarizes recent ticker news with signal/fundamental context | `output/news/` |
@@ -62,6 +70,83 @@ Not every workflow uses sources the same way:
 - **Trend Catcher** performs dynamic recent market/news discovery. When ticker pulse is disabled, it does not start from a fixed ticker list; it looks for current broad-market evidence first.
 
 The relevant search depth and source limits live in `news_summary`, `agent`, and `oracle` sections of `config/config.yaml`.
+
+## Decision Guardrails
+
+Decision Guardrails is built for the investor who buys in small amounts and wants help avoiding the classic traps:
+
+- buying only because a ticker is running
+- skipping research because a score looks high
+- holding a broken thesis too long
+- sizing a position too aggressively
+- forgetting why a ticker was bought in the first place
+
+It reads the latest `ranked_signals.csv` and creates four buckets:
+
+- **Research Calmly**: strong enough to investigate, not an automatic buy
+- **FOMO Danger**: overbought, crowded, high-volume, or fast-moving setups where waiting may be wiser
+- **Sell Review**: weak or deteriorating names that deserve a thesis check
+- **Sleep On It**: exciting but risky setups where impulsive action is dangerous
+
+It also includes a starter-position planner and a browser-local decision journal. See [Small Long-Term Investor Playbook](docs/INVESTOR_PLAYBOOK.md).
+
+## Ticker Discovery
+
+Ticker Discovery helps you expand or clean up your watchlist without manually hunting symbols.
+
+You can search broad phrases such as:
+
+- `top dividend companies`
+- `water infrastructure`
+- `companies providing water cooling technologies to data centers`
+- `cybersecurity ETFs`
+- `uranium miners`
+
+The app returns candidate U.S.-listed stocks and ETFs with a short reason each may be interesting. It also shows whether each ticker is already in `config/config.yaml`, so **Add** changes to **Remove** after a successful update.
+
+Ticker Discovery is for watchlist construction, not recommendations. After adding candidates, run Scanner, then use Opportunity Map, Decision Guardrails, charts, News Summary, and Agent before making a decision.
+
+## Right Way To Use The App
+
+The app is designed as a research workflow, not a buy button.
+
+1. **Run Scanner**
+   - This creates the latest technical and fundamental signal table.
+   - The score tells you what deserves attention, not what you must buy.
+
+2. **Use Ticker Discovery When Your Watchlist Feels Too Narrow**
+   - Search by theme, problem, sector, or investing style.
+   - Add only U.S.-listed stocks or ETFs you actually want to track.
+   - Remove stale tickers when they are no longer part of your process.
+
+3. **Open Opportunity Map**
+   - Start with the score-versus-risk view.
+   - Upper-left names are usually better research candidates than high-risk crowded names.
+   - Click a ticker to open details.
+
+4. **Understand The Evidence Type**
+   - **Technical analysis** comes from price, trend, momentum, volume, volatility, drawdown, RSI, MACD, and moving averages.
+   - **Fundamental analysis** comes from business and valuation data such as earnings, growth, margins, P/E, PEG, price/book, dividends, and balance-sheet measures.
+   - **News analysis** comes from recent external sources and should always be checked for timestamps.
+
+5. **Use Decision Guardrails**
+   - Research Calmly means “worth studying,” not “buy now.”
+   - FOMO Danger means “slow down and avoid chasing.”
+   - Sell Review means “check whether the original thesis is still valid,” not “auto-sell.”
+   - Sleep On It means the setup may be exciting but emotionally risky.
+   - Adjust the risk and time-horizon sliders so the warnings match your actual temperament.
+
+6. **Click Through Before A Final Decision**
+   - From ticker detail panels, use:
+     - **Interactive Chart** for technical context
+     - **Run News Summary** for recent source-grounded news
+     - **Ask Agent Before Deciding** for a decision-grade research brief
+
+7. **Write The Thesis**
+   - Use the Decision Journal to write why you are buying, holding, trimming, or avoiding.
+   - If the thesis is only “it is going up,” wait.
+
+This workflow is intentionally slower than impulse buying. That is the point.
 
 ## Trend Catcher
 
@@ -120,6 +205,8 @@ If macOS blocks the launcher:
 chmod +x run_app.sh "Market Signal Scanner.command"
 ```
 
+For full setup, port overrides, Ollama checks, and troubleshooting, see [Installation And Setup](docs/INSTALL.md).
+
 ## Manual Install
 
 ```bash
@@ -127,6 +214,7 @@ git clone git@github.com:asimmunawar/market-signal-scanner.git
 cd market-signal-scanner
 python3 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
 cp config/config.example.yaml config/config.yaml
 ```
@@ -220,6 +308,7 @@ Important sections:
 - `news_summary`: source settings and local LLM settings
 - `agent`: ReAct/search depth and LLM settings
 - `oracle`: Trend Catcher settings kept under this config key for backward compatibility
+- `ui`: GUI theme
 
 Example:
 
@@ -244,6 +333,9 @@ oracle:
   pulse_enabled: true
   pulse_use_baseline_tickers: false
   pulse_include_config_tickers: false
+
+ui:
+  theme: "green"
 ```
 
 Price interval changes signal meaning. `SMA 50` with `1d` means 50 daily bars; with `1h` it means 50 hourly bars.
@@ -310,6 +402,9 @@ config/
   config.example.yaml           # public example config
   config.yaml                   # local editable config
   prompts/                      # editable LLM prompts
+docs/
+  INSTALL.md                    # setup, troubleshooting, and update guide
+  INVESTOR_PLAYBOOK.md          # small-investor workflow and guardrails
 market_signal_scanner/
   api/server.py                 # FastAPI GUI backend
   web/                          # browser UI and app assets
@@ -361,6 +456,8 @@ Issues and pull requests are welcome. Good contributions include:
 - cleaner backtest assumptions
 - GUI polish
 - tests and reliability improvements
+
+See [Contributing](CONTRIBUTING.md) for setup, checks, and investor-safety guidelines.
 
 Before committing, keep generated/local folders out of git:
 

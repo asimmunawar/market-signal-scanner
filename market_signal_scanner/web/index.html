@@ -6,7 +6,7 @@
   <title>market-signal-scanner</title>
   <link rel="icon" type="image/png" href="/static/assets/app-icon-small.png" />
   <link rel="apple-touch-icon" href="/static/assets/app-icon.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260502-opportunity-map" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260512-us-discovery-remove" />
   <link rel="stylesheet" href="/api/ui/theme.css?v=20260428-themes" />
 </head>
 <body>
@@ -23,6 +23,7 @@
         <button class="nav-button active" data-tab="home">Home</button>
         <button class="nav-button" data-tab="run">Scanner</button>
         <button class="nav-button" data-tab="opportunity">Opportunity Map</button>
+        <button class="nav-button" data-tab="guardrails">Decision Guardrails</button>
         <button class="nav-button" data-tab="chart">Charts</button>
         <button class="nav-button" data-tab="news">News Summary</button>
         <button class="nav-button" data-tab="agent">Agent</button>
@@ -63,6 +64,13 @@
           </div>
         </section>
 
+        <section class="workflow-strip">
+          <div><strong>1</strong><span>Run Scanner</span><em>Build today’s ranked signal table.</em></div>
+          <div><strong>2</strong><span>Open Opportunity Map</span><em>Find research candidates without chasing.</em></div>
+          <div><strong>3</strong><span>Use Guardrails</span><em>Match ideas to your risk and budget.</em></div>
+          <div><strong>4</strong><span>Ask Agent</span><em>Check news, fundamentals, and thesis risks.</em></div>
+        </section>
+
         <div class="home-grid">
           <section class="home-card">
             <h3>Scanner</h3>
@@ -73,6 +81,11 @@
             <h3>Opportunity Map</h3>
             <p>See your latest scan as a risk/reward map, leaderboard, and momentum heatmap.</p>
             <button class="home-card-link" type="button" data-go-tab="opportunity">Open Map</button>
+          </section>
+          <section class="home-card">
+            <h3>Decision Guardrails</h3>
+            <p>Slow down FOMO, review sell risks, and size starter positions with a checklist.</p>
+            <button class="home-card-link" type="button" data-go-tab="guardrails">Open Guardrails</button>
           </section>
           <section class="home-card">
             <h3>Trend Catcher</h3>
@@ -112,6 +125,11 @@
             <p>Launch current scans or historical backtests from the same config file.</p>
           </div>
         </div>
+        <section class="explain-strip">
+          <div><strong>What to do here</strong><span>Run a scan first. It ranks your configured tickers, then the Opportunity Map and Guardrails turn that scan into easier decisions.</span></div>
+          <div><strong>Current scan</strong><span>Best for “what looks interesting or risky today?”</span></div>
+          <div><strong>Backtest</strong><span>Best for “would these rules have behaved reasonably in the past?”</span></div>
+        </section>
         <div class="grid two">
           <section class="panel">
             <h3>Current Scan</h3>
@@ -135,6 +153,17 @@
           <div id="runProgress" class="job-card muted">No scan or backtest started yet.</div>
         </section>
         <section id="runReportPreview" class="panel preview empty">Run a scan or backtest to preview the Markdown report here.</section>
+        <section class="next-step-panel">
+          <div>
+            <h3>After The Scan Finishes</h3>
+            <p>Use the scan report for the broad ranking, then move into visual inspection and decision discipline.</p>
+          </div>
+          <div class="button-row">
+            <button class="ghost" type="button" data-go-tab="opportunity">Open Opportunity Map</button>
+            <button class="ghost" type="button" data-go-tab="guardrails">Open Guardrails</button>
+            <button class="ghost" type="button" data-go-tab="outputs">Browse Outputs</button>
+          </div>
+        </section>
       </section>
 
       <section id="tab-opportunity" class="tab">
@@ -149,10 +178,19 @@
         <section class="opportunity-summary" id="opportunitySummary">
           <div class="muted">Run a scan first, then refresh this map.</div>
         </section>
+        <section class="explain-strip">
+          <div><strong>How to read it</strong><span>Look first for high score with lower risk. Those are research candidates, not automatic buys.</span></div>
+          <div><strong>Best zone</strong><span>Upper-left usually means stronger score with less risk. That is where long-term investors often start research.</span></div>
+          <div><strong>Danger zone</strong><span>Upper-right can be exciting but volatile. Use Guardrails before chasing anything there.</span></div>
+        </section>
+        <section class="mini-guide">
+          <strong>Suggested workflow:</strong>
+          <span>Click a ticker bubble, read the technical/fundamental/news split on the right, then use <em>Ask Agent Before Deciding</em> for source-grounded research.</span>
+        </section>
 
         <section class="panel opportunity-workspace">
           <div class="opportunity-toolbar">
-            <label>Asset Type
+            <label>Asset Type <span class="help-tip" tabindex="0" data-help="Stock, ETF, or crypto. ETFs are baskets; stocks are individual companies; crypto often has higher volatility.">?</span>
               <select id="opportunityAssetType">
                 <option value="all">All</option>
                 <option value="Stock">Stocks</option>
@@ -160,7 +198,7 @@
                 <option value="Crypto">Crypto</option>
               </select>
             </label>
-            <label>Recommendation
+            <label>Recommendation <span class="help-tip" tabindex="0" data-help="The scanner's score bucket. Treat it as a research priority, not as a command to buy or sell.">?</span>
               <select id="opportunityRecommendation">
                 <option value="all">All</option>
                 <option value="Strong Buy">Strong Buy</option>
@@ -170,7 +208,7 @@
                 <option value="Strong Sell">Strong Sell</option>
               </select>
             </label>
-            <label>X Axis
+            <label>X Axis <span class="help-tip" tabindex="0" data-help="The horizontal measure. Risk Composite is usually easiest: farther right means more volatility/drawdown risk.">?</span>
               <select id="opportunityXAxis">
                 <option value="risk">Risk Composite</option>
                 <option value="volatility_annual">Volatility</option>
@@ -178,7 +216,7 @@
                 <option value="rsi_14">RSI</option>
               </select>
             </label>
-            <label>Y Axis
+            <label>Y Axis <span class="help-tip" tabindex="0" data-help="The vertical measure. Scanner Score is the broad rank; higher usually means stronger trend/momentum/valuation/quality after risk penalties.">?</span>
               <select id="opportunityYAxis">
                 <option value="score">Scanner Score</option>
                 <option value="opportunity">Opportunity Quality</option>
@@ -187,7 +225,7 @@
                 <option value="sharpe_like">Sharpe-like</option>
               </select>
             </label>
-            <label>Min Score
+            <label>Min Score <span class="help-tip" tabindex="0" data-help="Hide weaker names. A novice-friendly starting point is 30 or higher, then research before acting.">?</span>
               <input id="opportunityMinScore" type="number" value="-100" min="-100" max="100" step="5" />
             </label>
           </div>
@@ -208,14 +246,100 @@
 
         <div class="grid two">
           <section class="panel">
-            <h3>Opportunity Leaderboard</h3>
+            <h3>Opportunity Leaderboard <span class="help-tip" tabindex="0" data-help="Sorted by opportunity quality: high score with penalties for excessive risk and overbought readings.">?</span></h3>
             <div id="opportunityLeaderboard" class="opportunity-list muted">No data loaded.</div>
           </section>
           <section class="panel">
-            <h3>Momentum Rotation Board</h3>
+            <h3>Momentum Rotation Board <span class="help-tip" tabindex="0" data-help="Shows whether strength is short-term only or persistent across time windows. Green means stronger return or score; red means weaker.">?</span></h3>
             <div id="opportunityHeatmap" class="opportunity-heatmap muted">No data loaded.</div>
           </section>
         </div>
+      </section>
+
+      <section id="tab-guardrails" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Decision Guardrails</h2>
+            <p>Turn scanner output into disciplined next steps: research, wait, review, or size small.</p>
+          </div>
+          <button id="refreshGuardrails" class="ghost">Refresh</button>
+        </div>
+
+        <section class="guardrail-summary" id="guardrailSummary">
+          <div class="muted">Run a scan first, then refresh guardrails.</div>
+        </section>
+        <section class="explain-strip">
+          <div><strong>What to do here</strong><span>Use this before buying or selling. It is designed to slow down impulsive decisions.</span></div>
+          <div><strong>Not advice</strong><span>A bucket is a prompt for research. It does not know your taxes, goals, cost basis, or full portfolio.</span></div>
+          <div><strong>Best habit</strong><span>Write a thesis in the journal before acting. Future-you will thank present-you.</span></div>
+        </section>
+
+        <section class="panel guardrail-planner">
+          <div>
+            <h3>Starter Position Planner <span class="help-tip" tabindex="0" data-help="Suggests small starter amounts from your monthly budget. It is meant to reduce regret and avoid going all-in too early.">?</span></h3>
+            <p class="compact">For small long-term accounts, this uses your preferences to encourage starter sizing instead of all-in entries.</p>
+          </div>
+          <label>Monthly Budget <span class="help-tip" tabindex="0" data-help="The amount you are considering investing this month, not your total account value.">?</span>
+            <input id="guardrailBudget" type="number" min="10" step="10" value="100" />
+          </label>
+          <div id="guardrailSizing" class="guardrail-sizing muted">Load guardrails to see starter sizes.</div>
+        </section>
+
+        <section class="panel preference-panel">
+          <div class="panel-title-row">
+            <div>
+              <h3>Investor Preference Sliders <span class="help-tip" tabindex="0" data-help="These sliders do not change market data or scanner scores. They only shape the guardrail language and starter-size suggestions.">?</span></h3>
+              <p class="compact">Tell the app how cautious it should be for you before it suggests a starter size.</p>
+            </div>
+            <button id="resetGuardrailPrefs" class="ghost small" type="button">Reset</button>
+          </div>
+          <div class="preference-sliders">
+            <label>
+              <span>Risk Tolerance <strong id="riskToleranceValue">5</strong></span>
+              <input id="riskToleranceSlider" type="range" min="1" max="10" value="5" />
+              <em>1 = very cautious, 10 = comfortable with bigger swings.</em>
+            </label>
+            <label>
+              <span>Time Horizon <strong id="timeHorizonValue">7</strong></span>
+              <input id="timeHorizonSlider" type="range" min="1" max="10" value="7" />
+              <em>1 = weeks/months, 10 = many years.</em>
+            </label>
+            <label>
+              <span>FOMO Brake <strong id="fomoBrakeValue">7</strong></span>
+              <input id="fomoBrakeSlider" type="range" min="1" max="10" value="7" />
+              <em>Higher means the app should slow you down when a ticker is hot.</em>
+            </label>
+            <label>
+              <span>Max Per Idea <strong id="maxIdeaPctValue">25%</strong></span>
+              <input id="maxIdeaPctSlider" type="range" min="5" max="60" step="5" value="25" />
+              <em>Caps any one starter idea as a percent of this month’s budget.</em>
+            </label>
+          </div>
+          <div id="preferenceReadout" class="preference-readout muted">Preference readout will appear here.</div>
+        </section>
+
+        <div class="guardrail-grid">
+          <section class="panel">
+            <h3>Research Calmly <span class="help-tip" tabindex="0" data-help="Names that look good enough to investigate. Do news, valuation, and thesis work before buying.">?</span></h3>
+            <div id="guardrailResearch" class="guardrail-list muted">No data loaded.</div>
+          </section>
+          <section class="panel">
+            <h3>FOMO Danger <span class="help-tip" tabindex="0" data-help="Fast recent move, high RSI, unusual volume, or high risk. This means slow down, not necessarily avoid forever.">?</span></h3>
+            <div id="guardrailFomo" class="guardrail-list muted">No data loaded.</div>
+          </section>
+          <section class="panel">
+            <h3>Sell Review <span class="help-tip" tabindex="0" data-help="A prompt to review existing holdings. It is not an automatic sell signal; check if your original thesis is broken.">?</span></h3>
+            <div id="guardrailSellReview" class="guardrail-list muted">No data loaded.</div>
+          </section>
+          <section class="panel">
+            <h3>Sleep On It <span class="help-tip" tabindex="0" data-help="Exciting but risky setups. Waiting 24 hours can prevent emotional buys.">?</span></h3>
+            <div id="guardrailSleep" class="guardrail-list muted">No data loaded.</div>
+          </section>
+        </div>
+
+        <section class="panel guardrail-detail" id="guardrailDetail">
+          <div class="muted">Click any guardrail item to open a decision checklist and notes.</div>
+        </section>
       </section>
 
       <section id="tab-chart" class="tab">
@@ -225,10 +349,27 @@
             <p>Explore ticker price action with zoom, pan, crosshair, overlays, and technical panels.</p>
           </div>
         </div>
+        <section class="explain-strip">
+          <div><strong>Novice reading</strong><span>Use charts to understand trend and risk. Do not buy only because a line is going up.</span></div>
+          <div><strong>Overlays</strong><span>Moving averages and levels are visual guides, not guarantees.</span></div>
+          <div><strong>Confirmation</strong><span>Use News Summary or Agent to explain why the chart moved.</span></div>
+        </section>
+        <section class="mini-guide">
+          <strong>Chart workflow:</strong>
+          <span>Start with 1Y or 2Y daily bars, hide extra overlays if the chart feels crowded, then switch to box zoom for a closer look at the decision area.</span>
+        </section>
         <section class="panel chart-workspace">
           <div class="chart-toolbar">
-            <label>Ticker<input id="chartTicker" value="AAPL" /></label>
-            <label>Period<select id="chartPeriod">
+            <label class="chart-ticker-field">Ticker
+              <div class="ticker-combo">
+                <input id="chartTicker" value="AAPL" list="chartTickerList" autocomplete="off" spellcheck="false" />
+                <select id="chartTickerSelect" aria-label="Pick chart ticker">
+                  <option value="">Pick from list...</option>
+                </select>
+              </div>
+              <datalist id="chartTickerList"></datalist>
+            </label>
+            <label>Period <span class="help-tip" tabindex="0" data-help="How far back the chart looks. Longer periods are better for long-term context.">?</span><select id="chartPeriod">
               <option value="5d">5D</option>
               <option value="1mo">1M</option>
               <option value="3mo">3M</option>
@@ -238,7 +379,7 @@
               <option value="5y">5Y</option>
               <option value="max">Max</option>
             </select></label>
-            <label>Interval<select id="chartInterval">
+            <label>Interval <span class="help-tip" tabindex="0" data-help="Each candle/bar represents this much time. Daily and weekly are usually better for long-term investors than 5-minute bars.">?</span><select id="chartInterval">
               <option value="5m">5m</option>
               <option value="15m">15m</option>
               <option value="30m">30m</option>
@@ -248,21 +389,21 @@
               <option value="1mo">1M</option>
             </select></label>
             <label>Type<select id="chartType"><option value="candle">Candles</option><option value="line">Line</option></select></label>
-            <label>Bars<input id="chartLookback" type="number" value="260" min="30" max="5000" /></label>
-            <label>MA<input id="chartMa" value="20,50,100,200" /></label>
+            <label>Bars <span class="help-tip" tabindex="0" data-help="Number of candles shown. More bars gives more context but may look crowded.">?</span><input id="chartLookback" type="number" value="260" min="30" max="5000" /></label>
+            <label>MA <span class="help-tip" tabindex="0" data-help="Moving average windows. 50 and 200 are common long-term trend guides.">?</span><input id="chartMa" value="20,50,100,200" /></label>
             <label>Mouse<select id="chartMouseMode"><option value="pan">Pan</option><option value="box">Box Zoom</option></select></label>
             <button id="loadInteractiveChart" class="primary" type="button">Load</button>
             <button id="resetInteractiveChart" class="ghost" type="button">Reset View</button>
           </div>
           <div class="checks chart-checks">
-            <label><input id="showSma" type="checkbox" checked /> SMA</label>
-            <label><input id="showEma" type="checkbox" checked /> EMA</label>
-            <label><input id="showBollinger" type="checkbox" /> Bollinger</label>
-            <label><input id="showLevels" type="checkbox" checked /> Levels</label>
-            <label><input id="showTrendlines" type="checkbox" checked /> Trendlines</label>
+            <label><input id="showSma" type="checkbox" checked /> SMA <span class="help-tip" tabindex="0" data-help="Simple moving average: average price over a window. Helps show trend direction.">?</span></label>
+            <label><input id="showEma" type="checkbox" checked /> EMA <span class="help-tip" tabindex="0" data-help="Exponential moving average: reacts faster to recent price changes than SMA.">?</span></label>
+            <label><input id="showBollinger" type="checkbox" /> Bollinger <span class="help-tip" tabindex="0" data-help="Bands around price. Wide bands often mean higher volatility; touches are not automatic buy/sell signals.">?</span></label>
+            <label><input id="showLevels" type="checkbox" checked /> Levels <span class="help-tip" tabindex="0" data-help="Estimated support/resistance areas where price has reacted before. They can fail.">?</span></label>
+            <label><input id="showTrendlines" type="checkbox" checked /> Trendlines <span class="help-tip" tabindex="0" data-help="Visual slope guides. Useful for context, but not proof of future movement.">?</span></label>
             <label><input id="showVolume" type="checkbox" checked /> Volume</label>
-            <label><input id="showRsi" type="checkbox" checked /> RSI</label>
-            <label><input id="showMacd" type="checkbox" checked /> MACD</label>
+            <label><input id="showRsi" type="checkbox" checked /> RSI <span class="help-tip" tabindex="0" data-help="Momentum gauge from 0-100. Above 70 can mean overbought; below 30 can mean oversold.">?</span></label>
+            <label><input id="showMacd" type="checkbox" checked /> MACD <span class="help-tip" tabindex="0" data-help="Trend/momentum indicator. Crossovers can help timing, but should not replace research.">?</span></label>
           </div>
           <div id="chartLegend" class="chart-legend"></div>
           <div class="chart-shell">
@@ -275,7 +416,7 @@
           <div class="panel-title-row">
             <div>
               <h3>Static Chart Report</h3>
-              <p class="compact">Generates a saved PNG and Markdown chart report in <code>output/charts/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>.</p>
+              <p class="compact">Creates a saved technical-analysis snapshot with a visible chart and plain-English notes underneath.</p>
             </div>
             <button id="runChart" class="primary">Generate Static Report</button>
           </div>
@@ -290,6 +431,15 @@
             <p>Summarize a ticker using market signals, fundamentals, configured news sources, and a local LLM.</p>
           </div>
         </div>
+        <section class="explain-strip">
+          <div><strong>Use this for</strong><span>Understanding why a ticker moved and whether recent news changes the thesis.</span></div>
+          <div><strong>Good habit</strong><span>Check source dates. Old news should not drive today's decision.</span></div>
+          <div><strong>Warning</strong><span>News can explain attention, but it does not guarantee future returns.</span></div>
+        </section>
+        <section class="mini-guide">
+          <strong>Best use:</strong>
+          <span>Run this before buying a ticker from the scanner, after earnings, or when a position suddenly moves more than usual.</span>
+        </section>
         <section class="panel">
           <div class="form-grid news-form">
             <label>Ticker<input id="newsTicker" value="AAPL" /></label>
@@ -299,6 +449,11 @@
           <p class="hint">Writes to <code>output/news/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>. LLM and news source settings live in <code>config/config.yaml</code>.</p>
         </section>
         <section id="newsPreview" class="panel preview empty">No news summary generated in this session yet.</section>
+        <section class="decision-help-grid">
+          <div><strong>Technical</strong><span>Price, trend, RSI, volume, drawdown.</span></div>
+          <div><strong>Fundamental</strong><span>Business quality, valuation, growth, debt, margins.</span></div>
+          <div><strong>News</strong><span>Recent catalysts, risks, earnings, regulation, sentiment.</span></div>
+        </section>
       </section>
 
       <section id="tab-agent" class="tab">
@@ -308,6 +463,15 @@
             <p>Ask anything about markets, stocks, crypto, macro, sectors, risks, catalysts, valuation, or timing.</p>
           </div>
         </div>
+        <section class="explain-strip">
+          <div><strong>Use this for</strong><span>Questions that need source-grounded research, not quick chart reading.</span></div>
+          <div><strong>Ask better</strong><span>Include your time horizon, risk tolerance, and what you already own when relevant.</span></div>
+          <div><strong>Trust but verify</strong><span>Read the sources and timestamps before acting.</span></div>
+        </section>
+        <section class="mini-guide">
+          <strong>Good question pattern:</strong>
+          <span>“I am a small long-term investor. Should I research TICKER now, wait, or avoid chasing? Separate technical, fundamental, and news evidence.”</span>
+        </section>
         <section class="panel agent-phone-panel">
           <div class="agent-phone">
             <div class="agent-phone-head">
@@ -341,6 +505,16 @@
             <p>Scan broad markets for major disruptions, sudden trend shifts, and high-attention opportunities.</p>
           </div>
         </div>
+        <section class="explain-strip">
+          <div><strong>What it does</strong><span>Looks for fresh broad-market catalysts before starting from your favorite ticker.</span></div>
+          <div><strong>What to do</strong><span>If it flags something, decide whether to watch, research, avoid chasing, or review exposure.</span></div>
+          <div><strong>Best use</strong><span>Run it when you want a market pulse, not when you need a full thesis.</span></div>
+        </section>
+        <section class="decision-help-grid">
+          <div><strong>Watch</strong><span>Interesting, but wait for confirmation.</span></div>
+          <div><strong>Research</strong><span>Enough evidence to run Agent or News Summary.</span></div>
+          <div><strong>Avoid chasing</strong><span>High attention, stale sources, or weak evidence.</span></div>
+        </section>
         <section class="panel">
           <button id="runTrendCatcher" class="primary" type="button">Run Trend Catcher</button>
           <div id="trendCatcherStatus" class="status-line"></div>
@@ -369,6 +543,11 @@
           </div>
           <button id="refreshLlm" class="ghost">Check Status</button>
         </div>
+        <section class="explain-strip">
+          <div><strong>Why it matters</strong><span>Agent, News Summary, and Trend Catcher rely on the configured model.</span></div>
+          <div><strong>Simple Query</strong><span>Checks basic response quality and formatting.</span></div>
+          <div><strong>Tool Format</strong><span>Checks whether the model can return OpenAI-style tool calls.</span></div>
+        </section>
         <div class="grid two">
           <section class="panel">
             <h3>Configured Model</h3>
@@ -413,6 +592,10 @@
           </div>
           <button id="refreshRuns" class="ghost">Refresh</button>
         </div>
+        <section class="mini-guide">
+          <strong>Tip:</strong>
+          <span>Open Markdown reports for reading, CSV files for spreadsheet analysis, and chart PNGs when you want a shareable snapshot.</span>
+        </section>
         <div class="grid outputs-grid">
           <section class="panel"><div class="panel-title-row"><h3>Scans</h3><button class="trash-button" data-delete-kind="scans" title="Delete all scan runs">&#128465;</button></div><div id="scanRuns" class="run-list"></div></section>
           <section class="panel"><div class="panel-title-row"><h3>Backtests</h3><button class="trash-button" data-delete-kind="backtests" title="Delete all backtest runs">&#128465;</button></div><div id="backtestRuns" class="run-list"></div></section>
@@ -435,6 +618,40 @@
           </div>
           <div class="button-row"><button id="loadConfig" class="ghost">Reload</button><button id="saveConfig" class="primary">Save Config</button></div>
         </div>
+        <section class="explain-strip">
+          <div><strong>Source of truth</strong><span>Tickers, themes, groups, LLM settings, sources, and runtime options live here.</span></div>
+          <div><strong>Safe habit</strong><span>Reload before editing if you changed the file outside the GUI.</span></div>
+          <div><strong>After saving</strong><span>Run Scanner again so maps and guardrails use the new universe.</span></div>
+        </section>
+        <section class="panel ticker-discovery-panel">
+          <div class="panel-title-row">
+            <div>
+              <h3>Ticker Discovery</h3>
+              <p class="compact">Search a theme like <code>top dividend companies</code>, <code>water companies</code>, <code>energy</code>, <code>AI</code>, or <code>cybersecurity</code>, then add the tickers you want to track.</p>
+            </div>
+          </div>
+          <div class="ticker-discovery-form">
+            <label>Theme or ticker idea
+              <input id="tickerDiscoveryQuery" value="top dividend companies" placeholder="Top dividend companies, energy, water companies, uranium, cybersecurity..." />
+            </label>
+            <div class="button-row">
+              <button id="searchTickers" class="ghost" type="button">Quick Search</button>
+              <button id="deepSearchTickers" class="primary" type="button">Deep Research Search</button>
+            </div>
+          </div>
+          <div id="tickerDiscoveryStatus" class="status-line"></div>
+          <div id="tickerDiscoveryResults" class="ticker-discovery-results empty">Search for a theme to see candidate tickers.</div>
+        </section>
+        <section class="panel ticker-manager-panel">
+          <div class="panel-title-row">
+            <div>
+              <h3>Configured Tickers</h3>
+              <p class="compact">Review what is currently in <code>config.yaml</code>. Remove only when you no longer want it in scans, charts, and reports.</p>
+            </div>
+            <button id="refreshConfigTickers" class="ghost" type="button">Refresh List</button>
+          </div>
+          <div id="configTickerList" class="config-ticker-list empty">Loading configured tickers...</div>
+        </section>
         <textarea id="configEditor" spellcheck="false"></textarea>
         <div id="configStatus" class="status-line"></div>
       </section>
@@ -447,11 +664,15 @@
           </div>
           <button id="refreshActivityPage" class="ghost">Refresh</button>
         </div>
+        <section class="mini-guide">
+          <strong>Use this for debugging:</strong>
+          <span>Activity shows what ran, where outputs were saved, and expandable logs when something looks wrong.</span>
+        </section>
         <div id="activityList" class="jobs-list"></div>
       </section>
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260502-opportunity-map"></script>
+  <script src="/static/app.js?v=20260512-us-discovery-remove"></script>
 </body>
 </html>

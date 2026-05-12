@@ -14,6 +14,16 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! python3 - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 9) else 1)
+PY
+then
+  echo "Python 3.9+ is required."
+  python3 --version || true
+  exit 1
+fi
+
 if [ ! -d ".venv" ]; then
   echo "Creating virtual environment..."
   python3 -m venv .venv

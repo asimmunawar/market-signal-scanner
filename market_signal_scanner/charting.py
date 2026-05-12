@@ -413,35 +413,51 @@ def annotate_latest(ax, frame: pd.DataFrame, signals: dict[str, Any]) -> None:
 
 def build_chart_report(options: ChartOptions, signals: dict[str, Any], levels: list[dict[str, Any]], trendlines: list[dict[str, Any]]) -> str:
     positives, negatives = explain_signals(signals)
+    last_price = as_float(signals.get("last_price"))
+    chart_read = plain_english_chart_read(signals)
     lines = [
         f"# {options.ticker} Chart Report",
         "",
         f"Generated: {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z%z')}",
         "",
-        "This chart is an analytical view of historical price action. It is not financial advice.",
+        "This is a **technical analysis** report. It looks at price, trend, momentum, volatility, drawdown, volume, and chart levels. It does **not** include fresh news analysis or deep fundamental analysis. It is not financial advice.",
+        "",
+        "## How To Use This Report",
+        "",
+        "- Use it to understand whether the ticker is technically extended, weak, or in a constructive trend.",
+        "- Do **not** buy only because the chart looks strong. Check fundamentals and recent news before making a decision.",
+        "- If RSI is high or price is far above nearby levels, consider waiting for a calmer entry instead of chasing.",
+        "- If you already own it, use the caution signals to decide whether the original thesis still deserves confidence.",
+        "",
+        "## Plain-English Read",
+        "",
+        chart_read,
         "",
         "## Snapshot",
         "",
         f"- Last price: {fmt_number(signals.get('last_price'))}",
-        f"- Score: {fmt_number(signals.get('score'))}",
-        f"- Recommendation: {signals.get('recommendation', 'N/A')}",
-        f"- RSI 14: {fmt_number(signals.get('rsi_14'))}",
-        f"- Annualized volatility: {fmt_pct(signals.get('volatility_annual'))}",
-        f"- Max drawdown: {fmt_pct(signals.get('max_drawdown'))}",
+        f"- Score: {fmt_number(signals.get('score'))} — scanner score from -100 to +100; higher means stronger combined signals after risk penalties.",
+        f"- Recommendation: {signals.get('recommendation', 'N/A')} — score bucket, not a command to buy or sell.",
+        f"- RSI 14: {fmt_number(signals.get('rsi_14'))} — short-term momentum gauge; above 70 can mean overbought.",
+        f"- Annualized volatility: {fmt_pct(signals.get('volatility_annual'))} — how bumpy the asset has been; higher means harder to hold.",
+        f"- Max drawdown: {fmt_pct(signals.get('max_drawdown'))} — largest historical fall from a prior high in the measured data.",
         "",
-        "## Nearby Horizontal Support / Resistance",
+        "## Nearby Price Reference Levels",
+        "",
+        "These are historical pivot areas. They are **not guaranteed floors or ceilings**. A resistance level below the current price often means price already broke above an old ceiling; that old area may become a retest zone.",
         "",
     ]
     if levels:
-        for level in levels[:5]:
-            lines.append(f"- {level['type'].title()}: {level['price']:.2f} ({level['distance_pct']:+.2%} from last close)")
+        lines.extend(level_lines(levels[:6], last_price))
     else:
         lines.append("- No clear nearby pivot levels found in the selected lookback window.")
 
     lines.extend(["", "## Diagonal Trendlines", ""])
     if trendlines:
         for line in trendlines[:3]:
-            lines.append(f"- {line['label']}: currently near {line['values'][-1]:.2f}, slope {line['slope_per_bar']:+.4f} price units per bar, fitted from {line['points_used']} pivots.")
+            slope = "rising" if line["slope_per_bar"] > 0 else "falling"
+            meaning = "possible rising support" if line["type"] == "trend_support" else "possible resistance path"
+            lines.append(f"- {line['label']} ({slope}): currently near {line['values'][-1]:.2f}. This is a {meaning}, fitted from {line['points_used']} pivot points. Slope: {line['slope_per_bar']:+.4f} price units per bar.")
     else:
         lines.append("- No reliable diagonal trendlines found from recent pivots.")
 
@@ -454,8 +470,67 @@ def build_chart_report(options: ChartOptions, signals: dict[str, Any], levels: l
         "## Negative / Caution Signals",
         "",
         *(f"- {item}" for item in negatives[:4]),
+        "",
+        "## What This Does Not Tell You",
+        "",
+        "- It does not tell you whether the company is fundamentally cheap or expensive.",
+        "- It does not tell you whether today’s move is caused by earnings, product news, macro news, or hype.",
+        "- It does not know your cost basis, taxes, time horizon, or portfolio concentration.",
+        "",
+        "## Suggested Next Step",
+        "",
+        f"- If you are considering a decision on {options.ticker}, run **News Summary** or **Ask Agent Before Deciding** from the GUI to add source-grounded news and fundamental context.",
     ])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def plain_english_chart_read(signals: dict[str, Any]) -> str:
+    score = as_float(signals.get("score"), 0) or 0
+    rsi_value = as_float(signals.get("rsi_14"))
+    price_vs_200 = as_float(signals.get("price_vs_sma_200"), 0) or 0
+    volatility = as_float(signals.get("volatility_annual"), 0) or 0
+    parts: list[str] = []
+    if score >= 60:
+        parts.append("The technical setup is strong, but still needs valuation and news confirmation.")
+    elif score >= 30:
+        parts.append("The technical setup is constructive enough to research, but not strong enough to skip due diligence.")
+    elif score <= -30:
+        parts.append("The technical setup is weak and deserves caution or sell-review if you already hold it.")
+    else:
+        parts.append("The technical setup is mixed; avoid forcing a decision from the chart alone.")
+    if price_vs_200 > 0.05:
+        parts.append("Price is above the long-term moving average, which usually supports the trend.")
+    elif price_vs_200 < -0.05:
+        parts.append("Price is below the long-term moving average, which can signal trend weakness.")
+    if rsi_value is not None and rsi_value >= 70:
+        parts.append("RSI is elevated, so chasing immediately may carry FOMO risk.")
+    elif rsi_value is not None and rsi_value <= 35:
+        parts.append("RSI is low, which can mean weakness or a possible oversold bounce; news and fundamentals matter.")
+    if volatility >= 0.40:
+        parts.append("Volatility is high, so position size should usually be smaller.")
+    return " ".join(parts)
+
+
+def level_lines(levels: list[dict[str, Any]], last_price: float | None) -> list[str]:
+    lines: list[str] = []
+    for level in levels:
+        price = float(level["price"])
+        distance = as_float(level.get("distance_pct"), 0.0) or 0.0
+        if last_price is None:
+            location = "nearby"
+            implication = "watch how price reacts if it returns to this area"
+        elif price < last_price:
+            location = "below current price"
+            implication = "possible retest/support area"
+        elif price > last_price:
+            location = "above current price"
+            implication = "possible overhead resistance"
+        else:
+            location = "at current price"
+            implication = "active decision area"
+        pivot_type = str(level["type"]).title()
+        lines.append(f"- {pivot_type} pivot at {price:.2f} ({distance:+.2%}, {location}) — {implication}.")
+    return lines
 
 
 def explain_signals(signals: dict[str, Any]) -> tuple[list[str], list[str]]:
