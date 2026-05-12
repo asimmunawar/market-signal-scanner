@@ -12,6 +12,18 @@ Only treat sources as actionable if their supplied Published/Fetched/Freshness m
 Intraday market pulse:
 {market_pulse_text}
 
+Previous Trend Catcher run:
+{previous_run_text}
+
+Configured watchlist context:
+{watchlist_text}
+
+Latest scanner snapshot:
+{scanner_snapshot_text}
+
+Source freshness table:
+{source_freshness_text}
+
 Evidence gathered:
 {evidence_text}
 
@@ -52,6 +64,18 @@ Explain the causal chain to assets, sectors, companies, rates, commodities, cryp
 ## Market Pulse Confirmation
 Explain whether intraday price/volume movement confirms, contradicts, or fails to confirm the headline-driven thesis. Reference pulse entries as [P1], [P2], etc. when useful.
 
+## What Changed Since Last Run
+Compare the fresh evidence with the previous Trend Catcher run. Say whether this is new, continuing, fading, or materially different. If no previous run is available, say so briefly.
+
+## Watchlist Impact
+Use the configured watchlist context only after identifying the trend from evidence. List affected configured tickers if the evidence or scanner snapshot supports the connection; otherwise say no clear watchlist impact was found.
+
+## Top Buy / Watch / Avoid
+Use the latest scanner snapshot plus the fresh evidence to give compact categories:
+- **Buy/watch:** tickers or sectors with supportive evidence and favorable scanner context.
+- **Avoid/reduce:** tickers or sectors with negative evidence or weak scanner context.
+- **No action:** areas where evidence is too thin or unconfirmed.
+
 ## Early Trend Read
 Say whether this looks like:
 - early accumulation / buy attention
@@ -71,8 +95,11 @@ Give concrete catalysts/data/headlines to monitor. Include 2-5 specific next che
 ## Source Notes
 Cite evidence using [1], [2], etc.
 
+## Source Freshness
+Include the supplied source freshness table or summarize it if the table is too long.
+
 Rules:
-- Keep the full report under 500 words.
+- Keep the full report under 650 words, excluding the Source Freshness table.
 - Use 1-3 bullets per section after Attention Verdict.
 - Each bullet must be one sentence.
 - If no evidence was gathered, do not identify a trend, alert, catalyst, beneficiary, loser, buy signal, or sell warning. Say Trend Catcher is unable to assess because source evidence is missing.
@@ -90,6 +117,9 @@ Rules:
 - Do not make the Attention Verdict generic. It must answer "what should I do right now?" in one clear action sentence.
 - If the setup is not strong enough for an immediate trade, say "No trade yet" and give the specific watch condition.
 - The action sentence must use current wording: check latest price/volume, monitor the current reaction, wait for confirmation, review exposure, or avoid chasing.
+- Do not force watchlist impact or buy/watch/avoid ideas. If scanner output is missing or evidence is weak, say that clearly.
+- Treat scanner rankings as context, not proof. Fresh evidence and source timestamps control the alert verdict.
+- Do not let configured tickers bias trend discovery; use them only in Watchlist Impact after evaluating evidence.
 - Never claim certainty or guaranteed profit.
 - Distinguish confirmed facts from market interpretation.
 - Do not fabricate tickers, numbers, policies, or news.

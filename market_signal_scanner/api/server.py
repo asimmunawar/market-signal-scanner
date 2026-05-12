@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
 import signal
 import shutil
@@ -23,7 +24,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from market_signal_scanner.agent_researcher import append_agent_log_event, answer_followup, run_agent_research, sync_agent_log_llm_calls
+from market_signal_scanner.charting import ChartOptions, build_interactive_chart_payload
 from market_signal_scanner.config_loader import load_config
+from market_signal_scanner.data_fetcher import Cache, fetch_price_history, validate_price_frame
+from market_signal_scanner.llm_utils import clean_llm_response
 from market_signal_scanner.trend_catcher import append_trend_catcher_log_event, run_trend_catcher
 
 
@@ -32,6 +36,7 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "config.yaml"
 OUTPUT_ROOT = PROJECT_ROOT / "output"
 WEB_ROOT = PROJECT_ROOT / "market_signal_scanner" / "web"
 CLI_SCRIPT = PROJECT_ROOT / "market-signal-scanner.py"
+LOGGER = logging.getLogger(__name__)
 
 
 class SaveConfigRequest(BaseModel):
@@ -61,6 +66,10 @@ class AgentStartRequest(BaseModel):
 
 class AgentQuestionRequest(BaseModel):
     question: str
+
+
+class LlmDiagnosticRequest(BaseModel):
+    kind: str
 
 
 @dataclass
@@ -408,8 +417,221 @@ def stop_llm() -> dict[str, Any]:
     return get_llm_status() | {"ok": True, "message": "Ollama stopped."}
 
 
+@app.post("/api/llm/diagnostic")
+def run_llm_diagnostic(request: LlmDiagnosticRequest) -> dict[str, Any]:
+    config = load_config(CONFIG_PATH)
+    llm = config.news_summary
+    if llm.provider != "ollama":
+        raise HTTPException(status_code=400, detail=f"LLM diagnostics currently support Ollama only, not {llm.provider}")
+    kind = request.kind.strip().lower()
+    if kind == "simple":
+        prompt = (
+            "You are running a connectivity test for market-signal-scanner.\n"
+            "Reply with exactly this text and nothing else:\n"
+            "LLM_OK"
+        )
+        payload = {
+            "model": llm.model,
+            "prompt": prompt,
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0, "num_predict": 64, "num_ctx": 4096},
+        }
+        url = f"{llm.base_url}/api/generate"
+    elif kind == "tool":
+        payload = build_tool_diagnostic_payload(llm.model)
+        url = f"{llm.base_url}/v1/chat/completions"
+    else:
+        raise HTTPException(status_code=400, detail="kind must be simple or tool")
+
+    started_at = datetime.now().isoformat(timespec="seconds")
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=llm.timeout_seconds,
+        )
+        response.raise_for_status()
+        api_response = response.json()
+        output = diagnostic_model_text(kind, api_response)
+        cleaned_output = clean_llm_response(output)
+        return {
+            "ok": True,
+            "kind": kind,
+            "created_at": started_at,
+            "provider": llm.provider,
+            "model": llm.model,
+            "base_url": llm.base_url,
+            "endpoint": url.replace(llm.base_url, ""),
+            "raw_input": payload,
+            "raw_output": diagnostic_raw_output(kind, api_response, output),
+            "model_text": cleaned_output,
+            "raw_model_text": output,
+            "format_check": validate_llm_diagnostic(kind, cleaned_output, api_response),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "kind": kind,
+            "created_at": started_at,
+            "provider": llm.provider,
+            "model": llm.model,
+            "base_url": llm.base_url,
+            "endpoint": url.replace(llm.base_url, ""),
+            "raw_input": payload,
+            "raw_output": None,
+            "model_text": "",
+            "error": str(exc),
+            "format_check": {"ok": False, "message": "Diagnostic request failed before a usable model response was returned."},
+        }
+
+
 def stop_process() -> None:
     os.kill(os.getpid(), signal.SIGINT)
+
+
+def build_tool_diagnostic_payload(model: str) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Use the provided tool to get a quote for AAPL. Do not answer in prose.",
+            }
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_quote",
+                    "description": "Get a latest market quote for a ticker symbol.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "ticker": {
+                                "type": "string",
+                                "description": "Ticker symbol, for example AAPL.",
+                            }
+                        },
+                        "required": ["ticker"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ],
+        "tool_choice": {"type": "function", "function": {"name": "get_quote"}},
+        "temperature": 0,
+        "max_tokens": 256,
+        "stream": False,
+        "think": False,
+        "options": {"num_ctx": 4096},
+    }
+
+
+def diagnostic_model_text(kind: str, api_response: dict[str, Any]) -> str:
+    if kind == "simple":
+        return str(api_response.get("response") or "")
+    message = diagnostic_chat_message(api_response)
+    content = message.get("content")
+    if content:
+        return str(content)
+    tool_calls = message.get("tool_calls") or []
+    if tool_calls:
+        return json.dumps({"tool_calls": tool_calls}, ensure_ascii=False, indent=2)
+    return ""
+
+
+def diagnostic_raw_output(kind: str, api_response: dict[str, Any], output: str) -> Any:
+    if kind == "simple":
+        return output
+    message = diagnostic_chat_message(api_response)
+    return {
+        "role": message.get("role", "assistant"),
+        "content": message.get("content") or "",
+        "tool_calls": message.get("tool_calls") or [],
+    }
+
+
+def diagnostic_chat_message(api_response: dict[str, Any]) -> dict[str, Any]:
+    choices = api_response.get("choices") or []
+    if not choices:
+        return {}
+    message = choices[0].get("message") if isinstance(choices[0], dict) else {}
+    return message if isinstance(message, dict) else {}
+
+
+def validate_llm_diagnostic(kind: str, output: str, api_response: dict[str, Any] | None = None) -> dict[str, Any]:
+    text = clean_llm_response(output)
+    if kind == "simple":
+        return {
+            "ok": text == "LLM_OK",
+            "message": "Expected final text LLM_OK." if text != "LLM_OK" else "Simple response matched after cleanup.",
+        }
+    if kind == "tool":
+        tool_call = first_tool_call(api_response or {})
+        if not tool_call:
+            return {"ok": False, "message": "No tool call was returned by the chat/completions response."}
+        function = tool_call.get("function") or {}
+        name = function.get("name")
+        raw_arguments = function.get("arguments") or "{}"
+        try:
+            arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else dict(raw_arguments)
+        except Exception as exc:
+            return {"ok": False, "message": f"Tool arguments are not valid JSON: {exc}", "tool_call": tool_call}
+        parsed = {"tool": name, "arguments": arguments}
+        expected = {"tool": "get_quote", "arguments": {"ticker": "AAPL"}}
+        return {
+            "ok": parsed == expected,
+            "message": "Tool call matched exactly." if parsed == expected else "Tool call returned, but did not match the expected function/arguments exactly.",
+            "parsed": parsed,
+            "tool_call": tool_call,
+        }
+    return {"ok": False, "message": "Unknown diagnostic kind."}
+
+
+def first_tool_call(api_response: dict[str, Any]) -> dict[str, Any]:
+    message = diagnostic_chat_message(api_response)
+    tool_calls = message.get("tool_calls") or []
+    if not tool_calls:
+        return {}
+    first = tool_calls[0]
+    return first if isinstance(first, dict) else {}
+
+
+def parse_chart_moving_averages(raw: str) -> tuple[int, ...]:
+    values: list[int] = []
+    for part in str(raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = int(part)
+        except ValueError:
+            continue
+        if 2 <= value <= 500:
+            values.append(value)
+    return tuple(values or [20, 50, 100, 200])
+
+
+def normalize_chart_period_interval(period: str, interval: str) -> tuple[str, str]:
+    clean_period = (period or "1y").strip()
+    clean_interval = (interval or "1d").strip()
+    valid_periods = {"5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"}
+    if clean_period not in valid_periods:
+        clean_period = "1y"
+    allowed = {
+        "5d": {"5m", "15m", "30m", "1h", "1d"},
+        "1mo": {"5m", "15m", "30m", "1h", "1d"},
+        "3mo": {"1h", "1d", "1wk", "1mo"},
+        "6mo": {"1h", "1d", "1wk", "1mo"},
+        "1y": {"1h", "1d", "1wk", "1mo"},
+        "2y": {"1h", "1d", "1wk", "1mo"},
+        "5y": {"1d", "1wk", "1mo"},
+        "max": {"1d", "1wk", "1mo"},
+    }
+    if clean_interval not in allowed[clean_period]:
+        clean_interval = "15m" if clean_period in {"5d", "1mo"} else "1d"
+    return clean_period, clean_interval
 
 
 @app.get("/api/config", response_class=PlainTextResponse)
@@ -429,6 +651,216 @@ def get_agent_suggested_questions() -> dict[str, Any]:
 def save_config(request: SaveConfigRequest) -> dict[str, Any]:
     CONFIG_PATH.write_text(request.text, encoding="utf-8")
     return {"ok": True, "path": str(CONFIG_PATH)}
+
+
+@app.get("/api/chart/interactive")
+def interactive_chart_data(
+    ticker: str,
+    period: str = "1y",
+    interval: str = "1d",
+    chart_type: str = "candle",
+    lookback: int = 260,
+    moving_averages: str = "20,50,100,200",
+    support_resistance: bool = True,
+    bollinger: bool = True,
+    volume: bool = True,
+    rsi: bool = True,
+    macd: bool = True,
+) -> dict[str, Any]:
+    ticker = ticker.strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    period, interval = normalize_chart_period_interval(period, interval)
+    config = load_config(CONFIG_PATH)
+    cache = Cache(config.runtime.cache_dir)
+    prices = fetch_price_history(
+        [ticker],
+        cache,
+        config.runtime.refresh_prices_hours,
+        period=period,
+        interval=interval,
+    )
+    if ticker not in prices:
+        fallback = load_chart_cache_fallback(cache, ticker, interval, period)
+        if fallback is not None:
+            prices[ticker] = fallback
+    if ticker not in prices:
+        raise HTTPException(status_code=404, detail=f"No usable price history was fetched for {ticker}")
+    options = ChartOptions(
+        ticker=ticker,
+        chart_type="line" if chart_type == "line" else "candle",
+        lookback=max(30, min(5000, int(lookback))),
+        moving_averages=parse_chart_moving_averages(moving_averages),
+        show_support_resistance=support_resistance,
+        show_bollinger=bollinger,
+        show_volume=volume,
+        show_rsi=rsi,
+        show_macd=macd,
+    )
+    return build_interactive_chart_payload(prices[ticker], options)
+
+
+def load_chart_cache_fallback(cache: Cache, ticker: str, interval: str, period: str) -> Any:
+    periods = [period]
+    if period == "max":
+        periods.extend(["5y", "2y", "1y"])
+    elif period == "5y":
+        periods.extend(["max", "2y", "1y"])
+    elif period == "2y":
+        periods.extend(["5y", "max", "1y"])
+    else:
+        periods.extend(["2y", "5y", "max"])
+    for candidate in dict.fromkeys(periods):
+        path = cache.price_path(ticker, interval, candidate)
+        if not path.exists():
+            continue
+        try:
+            frame = cache.read_pickle(path)
+        except Exception:
+            continue
+        if validate_price_frame(frame):
+            LOGGER.info("Using stale chart cache fallback for %s interval=%s period=%s", ticker, interval, candidate)
+            return frame
+    return None
+
+
+@app.get("/api/opportunity-map")
+def opportunity_map_data() -> dict[str, Any]:
+    run_dir = newest_run("scans")
+    if run_dir is None:
+        raise HTTPException(status_code=404, detail="No scan runs found. Run a current scan first.")
+    csv_path = run_dir / "ranked_signals.csv"
+    if not csv_path.exists():
+        raise HTTPException(status_code=404, detail="Latest scan does not include ranked_signals.csv")
+    rows: list[dict[str, Any]] = []
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for raw in reader:
+            rows.append(normalize_opportunity_row(raw))
+    rows = [row for row in rows if row.get("ticker")]
+    rows.sort(key=lambda item: numeric_value(item.get("score")), reverse=True)
+    return {
+        "run_id": run_dir.name,
+        "row_count": len(rows),
+        "summary": opportunity_summary(rows),
+        "rows": rows,
+    }
+
+
+def normalize_opportunity_row(raw: dict[str, str]) -> dict[str, Any]:
+    ticker = str(raw.get("ticker") or "").strip().upper()
+    numeric_fields = [
+        "last_price",
+        "return_1d",
+        "return_5d",
+        "return_1m",
+        "return_3m",
+        "return_6m",
+        "return_1y",
+        "volatility_annual",
+        "downside_volatility",
+        "max_drawdown",
+        "sharpe_like",
+        "rsi_14",
+        "volume_spike",
+        "market_cap",
+        "avg_volume_20d",
+        "trend_score",
+        "momentum_score",
+        "risk_penalty",
+        "valuation_score",
+        "quality_score",
+        "score",
+    ]
+    row: dict[str, Any] = {
+        "ticker": ticker,
+        "name": raw.get("entity_name") or ticker,
+        "asset_type": opportunity_asset_type(ticker, raw),
+        "recommendation": raw.get("recommendation") or "Hold",
+        "yahoo_finance_url": raw.get("yahoo_finance_url") or "",
+        "tradingview_url": raw.get("tradingview_url") or "",
+    }
+    for field in numeric_fields:
+        row[field] = parse_float(raw.get(field))
+    row["risk"] = opportunity_risk(row)
+    row["opportunity"] = opportunity_quality(row)
+    row["quadrant"] = opportunity_quadrant(row)
+    return row
+
+
+def parse_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
+def numeric_value(value: Any, default: float = -9999.0) -> float:
+    return value if isinstance(value, (int, float)) and value == value else default
+
+
+def opportunity_asset_type(ticker: str, raw: dict[str, str]) -> str:
+    name = f"{raw.get('entity_name') or ''} {raw.get('asset_type') or ''}".lower()
+    if ticker.endswith("-USD") or "crypto" in name:
+        return "Crypto"
+    etf_words = (" etf", " fund", " trust", "ishares", "vanguard", "spdr", "invesco", "proshares", "wisdomtree", "msci", "select sector")
+    if any(word in name for word in etf_words):
+        return "ETF"
+    return "Stock"
+
+
+def opportunity_risk(row: dict[str, Any]) -> Optional[float]:
+    volatility = row.get("volatility_annual")
+    drawdown = row.get("max_drawdown")
+    if volatility is None and drawdown is None:
+        return None
+    vol_part = min(100.0, max(0.0, numeric_value(volatility, 0.0) * 100.0))
+    drawdown_part = min(100.0, max(0.0, abs(numeric_value(drawdown, 0.0)) * 100.0))
+    return round((vol_part * 0.58) + (drawdown_part * 0.42), 2)
+
+
+def opportunity_quality(row: dict[str, Any]) -> Optional[float]:
+    score = row.get("score")
+    risk = row.get("risk")
+    if score is None:
+        return None
+    risk_penalty = 0 if risk is None else max(0.0, risk - 25.0) * 0.35
+    rsi = row.get("rsi_14")
+    overbought_penalty = max(0.0, numeric_value(rsi, 50.0) - 72.0) * 0.6
+    return round(numeric_value(score, 0.0) - risk_penalty - overbought_penalty, 2)
+
+
+def opportunity_quadrant(row: dict[str, Any]) -> str:
+    score = numeric_value(row.get("score"), 0.0)
+    risk = numeric_value(row.get("risk"), 50.0)
+    if score >= 45 and risk <= 45:
+        return "Attractive"
+    if score >= 45 and risk > 45:
+        return "Speculative"
+    if score >= 10 and risk <= 45:
+        return "Watch"
+    return "Avoid"
+
+
+def opportunity_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    rec_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = {}
+    quadrant_counts: dict[str, int] = {}
+    for row in rows:
+        rec_counts[str(row.get("recommendation") or "Hold")] = rec_counts.get(str(row.get("recommendation") or "Hold"), 0) + 1
+        type_counts[str(row.get("asset_type") or "Stock")] = type_counts.get(str(row.get("asset_type") or "Stock"), 0) + 1
+        quadrant_counts[str(row.get("quadrant") or "Watch")] = quadrant_counts.get(str(row.get("quadrant") or "Watch"), 0) + 1
+    return {
+        "recommendations": rec_counts,
+        "asset_types": type_counts,
+        "quadrants": quadrant_counts,
+        "top_opportunities": rows[:10],
+    }
 
 
 @app.get("/api/runs")

@@ -8,9 +8,28 @@ const state = {
   trendCatcherPollTimer: null,
   activityPollTimer: null,
   runs: null,
+  chartData: null,
+  chartView: { start: 0, end: 0 },
+  chartDrag: null,
+  chartSelection: null,
+  chartHover: null,
+  opportunityData: null,
+  opportunityHover: null,
+  opportunityPoints: [],
+  opportunitySelected: null,
 };
 
 const $ = (id) => document.getElementById(id);
+const CHART_COLORS = {
+  sma: ['#2563eb', '#d946ef', '#f97316', '#64748b', '#0f766e', '#b91c1c'],
+  ema20: '#14b8a6',
+  ema50: '#a855f7',
+  bollinger: '#94a3b8',
+  support: '#16a34a',
+  resistance: '#dc2626',
+  trendSupport: '#15803d',
+  trendResistance: '#b91c1c',
+};
 
 window.addEventListener('error', (event) => {
   const status = $('newsStatus');
@@ -67,6 +86,8 @@ function loadTabData(tab) {
   if (tab === 'activity') loadActivity();
   if (tab === 'config') loadConfig();
   if (tab === 'llm') loadLlmStatus();
+  if (tab === 'chart') ensureInteractiveChart();
+  if (tab === 'opportunity') ensureOpportunityMap();
   if (tab === 'agent') {
     loadAgentSuggestions();
     restoreAgentSession();
@@ -122,6 +143,1017 @@ function useAgentSuggestion(question) {
   input.value = question;
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
+}
+
+async function ensureOpportunityMap() {
+  if (!state.opportunityData) await loadOpportunityMap();
+  else drawOpportunityMap();
+}
+
+async function loadOpportunityMap() {
+  const status = $('opportunityStatus');
+  if (status) status.textContent = 'Loading latest scan...';
+  try {
+    const data = await (await api('/api/opportunity-map')).json();
+    state.opportunityData = data;
+    state.opportunitySelected = null;
+    renderOpportunitySummary();
+    renderOpportunityBoards();
+    drawOpportunityMap();
+    const shown = filteredOpportunityRows().length;
+    if (status) status.textContent = `Latest scan ${data.run_id}: showing ${shown} of ${data.row_count} tickers.`;
+  } catch (error) {
+    if (status) status.textContent = `Could not load opportunity map: ${error.message}`;
+    $('opportunitySummary').innerHTML = `<div class="muted">${escapeHtml(error.message)}</div>`;
+    $('opportunityLeaderboard').innerHTML = '<div class="muted">Run a scan first.</div>';
+    $('opportunityHeatmap').innerHTML = '<div class="muted">Run a scan first.</div>';
+  }
+}
+
+function filteredOpportunityRows() {
+  const rows = state.opportunityData?.rows || [];
+  const assetType = $('opportunityAssetType')?.value || 'all';
+  const recommendation = $('opportunityRecommendation')?.value || 'all';
+  const minScore = Number($('opportunityMinScore')?.value || -100);
+  return rows.filter((row) => (
+    (assetType === 'all' || row.asset_type === assetType)
+    && (recommendation === 'all' || row.recommendation === recommendation)
+    && Number(row.score ?? -999) >= minScore
+  ));
+}
+
+function renderOpportunitySummary() {
+  const box = $('opportunitySummary');
+  if (!box || !state.opportunityData) return;
+  const rows = state.opportunityData.rows || [];
+  const summary = state.opportunityData.summary || {};
+  const recs = summary.recommendations || {};
+  const quadrants = summary.quadrants || {};
+  const averageScore = rows.length ? rows.reduce((sum, row) => sum + Number(row.score || 0), 0) / rows.length : 0;
+  const attractive = quadrants.Attractive || 0;
+  const speculative = quadrants.Speculative || 0;
+  box.innerHTML = [
+    opportunityStat('Universe', rows.length, 'tickers'),
+    opportunityStat('Avg Score', averageScore.toFixed(1), 'scanner'),
+    opportunityStat('Strong Buy / Buy', `${recs['Strong Buy'] || 0} / ${recs.Buy || 0}`, 'ranked'),
+    opportunityStat('Attractive', attractive, 'lower-risk high score'),
+    opportunityStat('Speculative', speculative, 'higher-risk high score'),
+  ].join('');
+}
+
+function opportunityStat(label, value, note) {
+  return `<div class="opportunity-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong><em>${escapeHtml(note)}</em></div>`;
+}
+
+function renderOpportunityBoards() {
+  const rows = filteredOpportunityRows();
+  renderOpportunityLeaderboard(rows);
+  renderOpportunityHeatmap(rows);
+  const status = $('opportunityStatus');
+  if (status && state.opportunityData) status.textContent = `Latest scan ${state.opportunityData.run_id}: showing ${rows.length} of ${state.opportunityData.row_count} tickers.`;
+}
+
+function renderOpportunityLeaderboard(rows) {
+  const box = $('opportunityLeaderboard');
+  if (!box) return;
+  const ranked = rows.slice().sort((a, b) => Number(b.opportunity ?? b.score ?? -999) - Number(a.opportunity ?? a.score ?? -999)).slice(0, 18);
+  if (!ranked.length) {
+    box.innerHTML = '<div class="muted">No tickers match the filters.</div>';
+    return;
+  }
+  box.innerHTML = ranked.map((row) => `
+    <button class="opportunity-row" type="button" data-ticker="${escapeHtml(row.ticker)}">
+      <span>
+        <strong>${escapeHtml(row.ticker)}</strong>
+        <em>${escapeHtml(row.asset_type)} · ${escapeHtml(row.quadrant)}</em>
+      </span>
+      <span class="rec-pill ${recommendationClass(row.recommendation)}">${escapeHtml(row.recommendation)}</span>
+      <span class="opportunity-score">${numberText(row.score, 1)}</span>
+    </button>
+  `).join('');
+}
+
+function renderOpportunityHeatmap(rows) {
+  const box = $('opportunityHeatmap');
+  if (!box) return;
+  const ranked = rows.slice().sort((a, b) => Number(b.score ?? -999) - Number(a.score ?? -999)).slice(0, 24);
+  if (!ranked.length) {
+    box.innerHTML = '<div class="muted">No tickers match the filters.</div>';
+    return;
+  }
+  const columns = [
+    ['1D', 'return_1d', 'return'],
+    ['5D', 'return_5d', 'return'],
+    ['1M', 'return_1m', 'return'],
+    ['3M', 'return_3m', 'return'],
+    ['6M', 'return_6m', 'return'],
+    ['1Y', 'return_1y', 'return'],
+    ['RSI', 'rsi_14', 'rsi'],
+    ['Score', 'score', 'score'],
+  ];
+  box.innerHTML = `
+    <div class="heatmap-grid" style="--heat-cols:${columns.length}">
+      <div class="heat-head">Ticker</div>
+      ${columns.map(([label]) => `<div class="heat-head">${label}</div>`).join('')}
+      ${ranked.map((row) => `
+        <button class="heat-ticker" type="button" data-ticker="${escapeHtml(row.ticker)}">${escapeHtml(row.ticker)}</button>
+        ${columns.map(([, key, type]) => `<button class="heat-cell" type="button" data-ticker="${escapeHtml(row.ticker)}" style="${heatStyle(row[key], type)}">${heatValue(row[key], type)}</button>`).join('')}
+      `).join('')}
+    </div>
+  `;
+}
+
+function drawOpportunityMap() {
+  const canvas = $('opportunityCanvas');
+  if (!canvas || !state.opportunityData) return;
+  const tooltip = $('opportunityTooltip');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(760, Math.floor(rect.width || 1100));
+  const height = Math.max(560, Math.floor(rect.height || 620));
+  if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = cssVar('--panel', '#ffffff');
+  ctx.fillRect(0, 0, width, height);
+  const rows = filteredOpportunityRows().filter((row) => isFiniteNumber(row[$('opportunityXAxis').value]) && isFiniteNumber(row[$('opportunityYAxis').value]));
+  const inner = { x: 64, y: 28, w: width - 104, h: height - 86 };
+  const xKey = $('opportunityXAxis').value;
+  const yKey = $('opportunityYAxis').value;
+  const xValues = rows.map((row) => xMetricValue(row, xKey));
+  const yValues = rows.map((row) => yMetricValue(row, yKey));
+  const xScale = opportunityScale(xValues, inner.x, inner.w, 0.08);
+  const yScale = opportunityScale(yValues, inner.y + inner.h, -inner.h, 0.08);
+  drawOpportunityFrame(ctx, inner, xScale, yScale, axisLabel(xKey), axisLabel(yKey));
+  drawOpportunityQuadrants(ctx, inner, xScale, yScale, xKey, yKey);
+  state.opportunityPoints = rows.map((row) => {
+    const cap = Number(row.market_cap || 0);
+    const volume = Number(row.avg_volume_20d || 0);
+    const sizeBase = cap > 0 ? Math.log10(cap) : Math.log10(Math.max(10, volume));
+    const radius = Math.max(5, Math.min(18, (sizeBase - 5) * 2.2));
+    return {
+      row,
+      x: xScale.to(xMetricValue(row, xKey)),
+      y: yScale.to(yMetricValue(row, yKey)),
+      r: radius,
+    };
+  });
+  state.opportunityPoints.forEach((point) => drawOpportunityBubble(ctx, point, point.row.ticker === state.opportunitySelected));
+  if (state.opportunityHover) drawOpportunityTooltip(tooltip);
+  else if (tooltip) tooltip.style.display = 'none';
+}
+
+function drawOpportunityFrame(ctx, inner, xScale, yScale, xLabel, yLabel) {
+  ctx.strokeStyle = cssVar('--line', '#d9e0e7');
+  ctx.strokeRect(inner.x, inner.y, inner.w, inner.h);
+  ctx.font = '11px ui-sans-serif, system-ui';
+  ctx.fillStyle = cssVar('--muted', '#667085');
+  for (let i = 0; i <= 4; i += 1) {
+    const x = inner.x + (inner.w / 4) * i;
+    const y = inner.y + (inner.h / 4) * i;
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+    ctx.beginPath();
+    ctx.moveTo(x, inner.y);
+    ctx.lineTo(x, inner.y + inner.h);
+    ctx.moveTo(inner.x, y);
+    ctx.lineTo(inner.x + inner.w, y);
+    ctx.stroke();
+    ctx.fillStyle = cssVar('--muted', '#667085');
+    ctx.fillText(compactAxis(xScale.from(x)), x - 12, inner.y + inner.h + 20);
+    ctx.fillText(compactAxis(yScale.from(y)), 10, y + 4);
+  }
+  ctx.fillStyle = cssVar('--ink', '#17212b');
+  ctx.font = '700 13px ui-sans-serif, system-ui';
+  ctx.fillText(xLabel, inner.x + inner.w - 150, inner.y + inner.h + 42);
+  ctx.save();
+  ctx.translate(18, inner.y + 126);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText(yLabel, 0, 0);
+  ctx.restore();
+}
+
+function drawOpportunityQuadrants(ctx, inner, xScale, yScale, xKey, yKey) {
+  if (xKey !== 'risk' || yKey !== 'score') return;
+  const riskLine = xScale.to(45);
+  const scoreLine = yScale.to(45);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.28)';
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.moveTo(riskLine, inner.y);
+  ctx.lineTo(riskLine, inner.y + inner.h);
+  ctx.moveTo(inner.x, scoreLine);
+  ctx.lineTo(inner.x + inner.w, scoreLine);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  opportunityZone(ctx, inner.x + 12, inner.y + 22, 'Attractive', '#166534');
+  opportunityZone(ctx, riskLine + 12, inner.y + 22, 'Speculative', '#92400e');
+  opportunityZone(ctx, inner.x + 12, scoreLine + 24, 'Watch', '#475569');
+  opportunityZone(ctx, riskLine + 12, scoreLine + 24, 'Avoid', '#991b1b');
+  ctx.restore();
+}
+
+function opportunityZone(ctx, x, y, label, color) {
+  ctx.fillStyle = color;
+  ctx.font = '800 12px ui-sans-serif, system-ui';
+  ctx.fillText(label, x, y);
+}
+
+function drawOpportunityBubble(ctx, point, selected) {
+  const color = recommendationColor(point.row.recommendation);
+  ctx.save();
+  ctx.globalAlpha = selected ? 0.98 : 0.78;
+  ctx.fillStyle = color;
+  ctx.strokeStyle = selected ? '#111827' : 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = selected ? 3 : 1.5;
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, point.r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  if (point.r >= 8 || selected) {
+    ctx.fillStyle = '#111827';
+    ctx.font = selected ? '800 12px ui-sans-serif, system-ui' : '700 10px ui-sans-serif, system-ui';
+    ctx.fillText(point.row.ticker, point.x + point.r + 3, point.y + 4);
+  }
+  ctx.restore();
+}
+
+function drawOpportunityTooltip(tooltip) {
+  if (!tooltip || !state.opportunityHover) return;
+  const row = state.opportunityHover.row;
+  tooltip.style.display = 'block';
+  tooltip.style.left = `${state.opportunityHover.x + 14}px`;
+  tooltip.style.top = `${state.opportunityHover.y + 14}px`;
+  tooltip.innerHTML = `
+    <strong>${escapeHtml(row.ticker)} · ${escapeHtml(row.recommendation)}</strong>
+    <span>Score ${numberText(row.score, 1)} · Risk ${numberText(row.risk, 1)}</span>
+    <span>1M ${pctText(row.return_1m)} · 3M ${pctText(row.return_3m)}</span>
+    <span>RSI ${numberText(row.rsi_14, 1)} · ${escapeHtml(row.quadrant)}</span>
+  `;
+}
+
+function selectOpportunityTicker(ticker) {
+  const row = (state.opportunityData?.rows || []).find((item) => item.ticker === ticker);
+  if (!row) return;
+  state.opportunitySelected = row.ticker;
+  renderOpportunityDetail(row);
+  drawOpportunityMap();
+}
+
+function renderOpportunityDetail(row) {
+  const box = $('opportunityDetail');
+  if (!box) return;
+  box.innerHTML = `
+    <div class="opportunity-detail-head">
+      <span class="asset-chip">${escapeHtml(row.asset_type)}</span>
+      <span class="rec-pill ${recommendationClass(row.recommendation)}">${escapeHtml(row.recommendation)}</span>
+    </div>
+    <h3>${escapeHtml(row.ticker)}</h3>
+    <p>${escapeHtml(row.name || row.ticker)}</p>
+    <div class="opportunity-metrics">
+      ${metricTile('Score', numberText(row.score, 1))}
+      ${metricTile('Quality', numberText(row.opportunity, 1))}
+      ${metricTile('Risk', numberText(row.risk, 1))}
+      ${metricTile('RSI', numberText(row.rsi_14, 1))}
+      ${metricTile('1M', pctText(row.return_1m))}
+      ${metricTile('1Y', pctText(row.return_1y))}
+    </div>
+    <div class="detail-list">
+      <div><span>Trend / Momentum</span><strong>${numberText(row.trend_score, 1)} / ${numberText(row.momentum_score, 1)}</strong></div>
+      <div><span>Risk Penalty</span><strong>${numberText(row.risk_penalty, 1)}</strong></div>
+      <div><span>Max Drawdown</span><strong>${pctText(row.max_drawdown)}</strong></div>
+      <div><span>Volatility</span><strong>${pctText(row.volatility_annual)}</strong></div>
+      <div><span>Volume Spike</span><strong>${numberText(row.volume_spike, 2)}x</strong></div>
+      <div><span>Quadrant</span><strong>${escapeHtml(row.quadrant)}</strong></div>
+    </div>
+    <div class="opportunity-links">
+      ${row.yahoo_finance_url ? `<a href="${escapeHtml(row.yahoo_finance_url)}" target="_blank" rel="noopener noreferrer">Yahoo</a>` : ''}
+      ${row.tradingview_url ? `<a href="${escapeHtml(row.tradingview_url)}" target="_blank" rel="noopener noreferrer">TradingView</a>` : ''}
+    </div>
+  `;
+}
+
+function metricTile(label, value) {
+  return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`;
+}
+
+function wireOpportunityMap() {
+  const canvas = $('opportunityCanvas');
+  if (canvas && canvas.dataset.wired !== 'true') {
+    canvas.dataset.wired = 'true';
+    canvas.addEventListener('mousemove', (event) => {
+      if (!state.opportunityPoints.length) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const hit = [...state.opportunityPoints].reverse().find((point) => Math.hypot(point.x - x, point.y - y) <= point.r + 4);
+      state.opportunityHover = hit ? { row: hit.row, x, y } : null;
+      drawOpportunityMap();
+    });
+    canvas.addEventListener('mouseleave', () => {
+      state.opportunityHover = null;
+      drawOpportunityMap();
+    });
+    canvas.addEventListener('click', () => {
+      if (state.opportunityHover) selectOpportunityTicker(state.opportunityHover.row.ticker);
+    });
+  }
+  ['opportunityAssetType', 'opportunityRecommendation', 'opportunityXAxis', 'opportunityYAxis', 'opportunityMinScore'].forEach((id) => {
+    const element = $(id);
+    if (element && element.dataset.wired !== 'true') {
+      element.dataset.wired = 'true';
+      element.addEventListener('change', () => {
+        renderOpportunityBoards();
+        drawOpportunityMap();
+      });
+    }
+  });
+}
+
+function xMetricValue(row, key) {
+  const value = Number(row[key]);
+  return key === 'max_drawdown' ? Math.abs(value || 0) * 100 : key.includes('volatility') ? value * 100 : value;
+}
+
+function yMetricValue(row, key) {
+  const value = Number(row[key]);
+  return key.startsWith('return_') ? value * 100 : value;
+}
+
+function opportunityScale(values, start, size, padRatio = 0.08) {
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) { min = 0; max = 1; }
+  if (min === max) { min -= 1; max += 1; }
+  const pad = (max - min) * padRatio;
+  min -= pad;
+  max += pad;
+  return {
+    min,
+    max,
+    to: (value) => start + ((value - min) / (max - min || 1)) * size,
+    from: (pixel) => min + ((pixel - start) / (size || 1)) * (max - min),
+  };
+}
+
+function axisLabel(key) {
+  const labels = {
+    risk: 'Risk Composite',
+    volatility_annual: 'Volatility %',
+    max_drawdown: 'Drawdown %',
+    rsi_14: 'RSI',
+    score: 'Scanner Score',
+    opportunity: 'Opportunity Quality',
+    return_1m: '1M Return %',
+    return_3m: '3M Return %',
+    sharpe_like: 'Sharpe-like',
+  };
+  return labels[key] || key;
+}
+
+function recommendationColor(value) {
+  return {
+    'Strong Buy': '#16a34a',
+    Buy: '#22c55e',
+    Hold: '#64748b',
+    Sell: '#f97316',
+    'Strong Sell': '#dc2626',
+  }[value] || '#64748b';
+}
+
+function recommendationClass(value) {
+  return String(value || 'Hold').toLowerCase().replace(/\s+/g, '-');
+}
+
+function heatStyle(value, type) {
+  const color = heatColor(value, type);
+  return `background:${color.bg};color:${color.fg};`;
+}
+
+function heatColor(value, type) {
+  if (!isFiniteNumber(value)) return { bg: '#f1f5f9', fg: '#64748b' };
+  let score = Number(value);
+  if (type === 'return') score = Math.max(-1, Math.min(1, score * 5));
+  if (type === 'score') score = Math.max(-1, Math.min(1, score / 100));
+  if (type === 'rsi') score = Math.max(-1, Math.min(1, (Math.abs(score - 50) / 50) * (score > 70 ? -1 : 1)));
+  if (score >= 0) {
+    const alpha = 0.16 + Math.abs(score) * 0.58;
+    return { bg: `rgba(22, 163, 74, ${alpha})`, fg: '#052e16' };
+  }
+  const alpha = 0.16 + Math.abs(score) * 0.58;
+  return { bg: `rgba(220, 38, 38, ${alpha})`, fg: '#450a0a' };
+}
+
+function heatValue(value, type) {
+  if (type === 'return') return pctText(value);
+  return numberText(value, type === 'score' ? 1 : 0);
+}
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function pctText(value) {
+  return isFiniteNumber(value) ? `${(value * 100).toFixed(1)}%` : 'n/a';
+}
+
+function numberText(value, digits = 1) {
+  return isFiniteNumber(value) ? Number(value).toFixed(digits) : 'n/a';
+}
+
+function compactAxis(value) {
+  return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
+}
+
+function chartParams() {
+  normalizeChartControls();
+  const params = new URLSearchParams({
+    ticker: $('chartTicker').value.trim() || 'AAPL',
+    period: $('chartPeriod').value,
+    interval: $('chartInterval').value,
+    chart_type: $('chartType').value,
+    lookback: String(Number($('chartLookback').value || 260)),
+    moving_averages: $('chartMa').value.trim() || '20,50,100,200',
+    support_resistance: String($('showLevels').checked || $('showTrendlines').checked),
+    bollinger: String($('showBollinger').checked),
+    volume: String($('showVolume').checked),
+    rsi: String($('showRsi').checked),
+    macd: String($('showMacd').checked),
+  });
+  return params;
+}
+
+async function ensureInteractiveChart() {
+  if (!state.chartData) await loadInteractiveChart();
+  else drawInteractiveChart();
+}
+
+async function loadInteractiveChart() {
+  const status = $('interactiveChartStatus');
+  normalizeChartControls();
+  status.textContent = 'Loading chart...';
+  $('loadInteractiveChart').disabled = true;
+  try {
+    const data = await (await api(`/api/chart/interactive?${chartParams().toString()}`)).json();
+    state.chartData = data;
+    state.chartView = { start: 0, end: Math.max(0, data.rows.length - 1) };
+    state.chartHover = null;
+    state.chartSelection = null;
+    renderChartLegend();
+    drawInteractiveChart();
+    const summary = data.summary || {};
+    const close = money(summary.last_close);
+    const change = signed(summary.change);
+    const changePct = signed(summary.change_pct, '%');
+    status.textContent = `${data.ticker}: ${close} (${change}, ${changePct}) across ${summary.bars || data.rows.length} bars.`;
+  } catch (error) {
+    status.textContent = `Could not load chart: ${error.message}`;
+  } finally {
+    $('loadInteractiveChart').disabled = false;
+  }
+}
+
+function resetInteractiveChart() {
+  if (!state.chartData) return;
+  state.chartView = { start: 0, end: Math.max(0, state.chartData.rows.length - 1) };
+  state.chartHover = null;
+  state.chartSelection = null;
+  drawInteractiveChart();
+}
+
+function drawInteractiveChart() {
+  const canvas = $('interactiveChartCanvas');
+  const tooltip = $('interactiveChartTooltip');
+  if (!canvas || !state.chartData) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(720, Math.floor(rect.width || canvas.clientWidth || 1200));
+  const height = Math.max(520, Math.floor(rect.height || canvas.clientHeight || 720));
+  if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = cssVar('--panel', '#ffffff');
+  ctx.fillRect(0, 0, width, height);
+
+  const rows = visibleChartRows();
+  if (!rows.length) return;
+  renderChartLegend();
+  const panels = chartPanels(height);
+  drawPricePanel(ctx, rows, panels.price, width);
+  if (panels.volume) drawVolumePanel(ctx, rows, panels.volume, width);
+  if (panels.rsi) drawLinePanel(ctx, rows, panels.rsi, width, ['rsi_14'], ['#7c3aed'], { min: 0, max: 100, guides: [30, 70], label: 'RSI' });
+  if (panels.macd) drawLinePanel(ctx, rows, panels.macd, width, ['macd', 'macd_signal'], ['#2563eb', '#f97316'], { histogram: 'macd_hist', label: 'MACD' });
+  if (state.chartHover) drawCrosshair(ctx, rows, panels, width, tooltip);
+  else if (tooltip) tooltip.style.display = 'none';
+  if (state.chartSelection) drawChartSelection(ctx);
+}
+
+function normalizeChartControls() {
+  const period = $('chartPeriod')?.value || '1y';
+  const interval = $('chartInterval')?.value || '1d';
+  const allowed = allowedChartIntervals(period);
+  if (!allowed.includes(interval)) {
+    $('chartInterval').value = defaultChartInterval(period);
+  }
+}
+
+function applyPeriodDefaults() {
+  const period = $('chartPeriod').value;
+  normalizeChartControls();
+  const defaults = {
+    '5d': 390,
+    '1mo': 500,
+    '3mo': 500,
+    '6mo': 520,
+    '1y': 260,
+    '2y': 520,
+    '5y': 1260,
+    max: 5000,
+  };
+  $('chartLookback').value = String(defaults[period] || 260);
+}
+
+function allowedChartIntervals(period) {
+  if (['5d', '1mo'].includes(period)) return ['5m', '15m', '30m', '1h', '1d'];
+  if (['3mo', '6mo', '1y', '2y'].includes(period)) return ['1h', '1d', '1wk', '1mo'];
+  return ['1d', '1wk', '1mo'];
+}
+
+function defaultChartInterval(period) {
+  if (['5d', '1mo'].includes(period)) return '15m';
+  return '1d';
+}
+
+function chartPanels(height) {
+  const top = 18;
+  const bottom = 22;
+  const gap = 10;
+  const volume = $('showVolume').checked;
+  const rsi = $('showRsi').checked;
+  const macd = $('showMacd').checked;
+  const smallCount = Number(volume) + Number(rsi) + Number(macd);
+  const smallHeight = smallCount ? Math.max(82, Math.min(120, Math.floor((height - top - bottom) * 0.15))) : 0;
+  const priceHeight = height - top - bottom - smallCount * smallHeight - smallCount * gap;
+  let y = top;
+  const panels = { price: { x: 58, y, w: 0, h: priceHeight } };
+  y += priceHeight + gap;
+  if (volume) { panels.volume = { x: 58, y, w: 0, h: smallHeight }; y += smallHeight + gap; }
+  if (rsi) { panels.rsi = { x: 58, y, w: 0, h: smallHeight }; y += smallHeight + gap; }
+  if (macd) panels.macd = { x: 58, y, w: 0, h: smallHeight };
+  return panels;
+}
+
+function visibleChartRows() {
+  const rows = state.chartData?.rows || [];
+  if (!rows.length) return [];
+  const start = Math.max(0, Math.min(state.chartView.start, rows.length - 1));
+  const end = Math.max(start, Math.min(state.chartView.end, rows.length - 1));
+  return rows.slice(start, end + 1);
+}
+
+function drawPricePanel(ctx, rows, panel, width) {
+  const inner = chartInner(panel, width);
+  const overlayKeys = activePriceOverlayKeys(rows);
+  const values = rows.flatMap((row) => [row.high, row.low, ...overlayKeys.map((key) => row[key])]).filter(isNum);
+  const scale = valueScale(values, inner.y, inner.h, 0.06);
+  drawPanelFrame(ctx, inner, scale, 'Price');
+  if ($('showBollinger').checked) {
+    drawSeries(ctx, rows, inner, scale, 'bb_upper', CHART_COLORS.bollinger, 1, [4, 4]);
+    drawSeries(ctx, rows, inner, scale, 'bb_mid', CHART_COLORS.bollinger, 0.8, [2, 4]);
+    drawSeries(ctx, rows, inner, scale, 'bb_lower', CHART_COLORS.bollinger, 1, [4, 4]);
+  }
+  if ($('showSma').checked) {
+    smaKeys(rows).forEach((key, index) => {
+      drawSeries(ctx, rows, inner, scale, key, CHART_COLORS.sma[index % CHART_COLORS.sma.length], 1.35);
+    });
+  }
+  if ($('showEma').checked) {
+    drawSeries(ctx, rows, inner, scale, 'ema_20', CHART_COLORS.ema20, 1.15);
+    drawSeries(ctx, rows, inner, scale, 'ema_50', CHART_COLORS.ema50, 1.15);
+  }
+  if (state.chartData.chart_type === 'line') drawSeries(ctx, rows, inner, scale, 'close', cssVar('--accent', '#0f766e'), 2);
+  else drawCandles(ctx, rows, inner, scale);
+  if ($('showLevels').checked) drawLevels(ctx, inner, scale);
+  if ($('showTrendlines').checked) drawTrendlines(ctx, rows, inner, scale);
+  drawChartTitle(ctx, inner);
+  drawTimeAxis(ctx, rows, inner);
+}
+
+function activePriceOverlayKeys(rows) {
+  const keys = [];
+  if ($('showSma').checked) keys.push(...smaKeys(rows));
+  if ($('showEma').checked) keys.push('ema_20', 'ema_50');
+  if ($('showBollinger').checked) keys.push('bb_upper', 'bb_mid', 'bb_lower');
+  return keys;
+}
+
+function smaKeys(rows) {
+  return Object.keys(rows[0] || {}).filter((key) => key.startsWith('sma_')).sort((a, b) => Number(a.slice(4)) - Number(b.slice(4)));
+}
+
+function renderChartLegend() {
+  const box = $('chartLegend');
+  if (!box || !state.chartData) return;
+  const rows = state.chartData.rows || [];
+  const items = [];
+  if ($('showSma').checked) {
+    smaKeys(rows).forEach((key, index) => {
+      items.push({ label: key.replace('sma_', 'SMA '), color: CHART_COLORS.sma[index % CHART_COLORS.sma.length] });
+    });
+  }
+  if ($('showEma').checked) {
+    items.push({ label: 'EMA 20', color: CHART_COLORS.ema20 });
+    items.push({ label: 'EMA 50', color: CHART_COLORS.ema50 });
+  }
+  if ($('showBollinger').checked) items.push({ label: 'Bollinger 20,2', color: CHART_COLORS.bollinger, dashed: true });
+  if ($('showLevels').checked) {
+    items.push({ label: 'Support', color: CHART_COLORS.support, dashed: true });
+    items.push({ label: 'Resistance', color: CHART_COLORS.resistance, dashed: true });
+  }
+  if ($('showTrendlines').checked) items.push({ label: 'Trendlines', color: CHART_COLORS.trendSupport, dashed: true });
+  box.innerHTML = items.length
+    ? items.map((item) => `<span class="chart-legend-item"><span class="chart-swatch${item.dashed ? ' dashed' : ''}" style="--swatch:${escapeHtml(item.color)}"></span>${escapeHtml(item.label)}</span>`).join('')
+    : '<span class="muted">No price overlays enabled.</span>';
+}
+
+function drawCandles(ctx, rows, inner, scale) {
+  const step = inner.w / Math.max(1, rows.length - 1);
+  const bodyWidth = Math.max(2, Math.min(12, step * 0.62));
+  rows.forEach((row, index) => {
+    const x = xForIndex(index, rows.length, inner);
+    const up = row.close >= row.open;
+    ctx.strokeStyle = up ? '#16a34a' : '#dc2626';
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, scale.y(row.high));
+    ctx.lineTo(x, scale.y(row.low));
+    ctx.stroke();
+    const yOpen = scale.y(row.open);
+    const yClose = scale.y(row.close);
+    const top = Math.min(yOpen, yClose);
+    const bodyHeight = Math.max(1, Math.abs(yClose - yOpen));
+    ctx.fillRect(x - bodyWidth / 2, top, bodyWidth, bodyHeight);
+  });
+}
+
+function drawSeries(ctx, rows, inner, scale, key, color, lineWidth = 1.4, dash = []) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash(dash);
+  ctx.beginPath();
+  let started = false;
+  rows.forEach((row, index) => {
+    if (!isNum(row[key])) {
+      started = false;
+      return;
+    }
+    const x = xForIndex(index, rows.length, inner);
+    const y = scale.y(row[key]);
+    if (!started) {
+      ctx.moveTo(x, y);
+      started = true;
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawVolumePanel(ctx, rows, panel, width) {
+  const inner = chartInner(panel, width);
+  const maxVol = Math.max(...rows.map((row) => Number(row.volume || 0)), 1);
+  drawPanelFrame(ctx, inner, { min: 0, max: maxVol, y: (v) => inner.y + inner.h - (v / maxVol) * inner.h }, 'Volume');
+  const step = inner.w / Math.max(1, rows.length - 1);
+  const barWidth = Math.max(2, Math.min(10, step * 0.68));
+  rows.forEach((row, index) => {
+    const x = xForIndex(index, rows.length, inner);
+    const h = Math.max(1, (Number(row.volume || 0) / maxVol) * inner.h);
+    ctx.fillStyle = row.close >= row.open ? 'rgba(22, 163, 74, 0.42)' : 'rgba(220, 38, 38, 0.42)';
+    ctx.fillRect(x - barWidth / 2, inner.y + inner.h - h, barWidth, h);
+  });
+}
+
+function drawLinePanel(ctx, rows, panel, width, keys, colors, options = {}) {
+  const inner = chartInner(panel, width);
+  const values = rows.flatMap((row) => keys.map((key) => row[key]).concat(options.histogram ? [row[options.histogram]] : [])).filter(isNum);
+  const scale = options.min !== undefined ? { min: options.min, max: options.max, y: (v) => inner.y + inner.h - ((v - options.min) / (options.max - options.min || 1)) * inner.h } : valueScale(values, inner.y, inner.h, 0.18);
+  drawPanelFrame(ctx, inner, scale, options.label || '');
+  (options.guides || []).forEach((guide) => drawGuide(ctx, inner, scale.y(guide), String(guide)));
+  if (options.histogram) drawHistogram(ctx, rows, inner, scale, options.histogram);
+  keys.forEach((key, index) => drawSeries(ctx, rows, inner, scale, key, colors[index], 1.35));
+}
+
+function drawHistogram(ctx, rows, inner, scale, key) {
+  const zero = scale.y(0);
+  const step = inner.w / Math.max(1, rows.length - 1);
+  const barWidth = Math.max(2, Math.min(10, step * 0.68));
+  rows.forEach((row, index) => {
+    if (!isNum(row[key])) return;
+    const x = xForIndex(index, rows.length, inner);
+    const y = scale.y(row[key]);
+    ctx.fillStyle = row[key] >= 0 ? 'rgba(22, 163, 74, 0.32)' : 'rgba(220, 38, 38, 0.32)';
+    ctx.fillRect(x - barWidth / 2, Math.min(y, zero), barWidth, Math.max(1, Math.abs(zero - y)));
+  });
+}
+
+function drawPanelFrame(ctx, inner, scale, label) {
+  ctx.strokeStyle = cssVar('--line', '#d9e0e7');
+  ctx.lineWidth = 1;
+  ctx.strokeRect(inner.x, inner.y, inner.w, inner.h);
+  ctx.fillStyle = cssVar('--muted', '#667085');
+  ctx.font = '11px ui-sans-serif, system-ui';
+  if (label) ctx.fillText(label, inner.x + 8, inner.y + 14);
+  for (let i = 0; i <= 4; i += 1) {
+    const y = inner.y + (inner.h / 4) * i;
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+    ctx.beginPath();
+    ctx.moveTo(inner.x, y);
+    ctx.lineTo(inner.x + inner.w, y);
+    ctx.stroke();
+    const value = scale.max - ((scale.max - scale.min) / 4) * i;
+    ctx.fillStyle = cssVar('--muted', '#667085');
+    ctx.fillText(compactNumber(value), inner.x + inner.w + 8, y + 4);
+  }
+}
+
+function drawGuide(ctx, inner, y, label) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(100, 116, 139, 0.42)';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(inner.x, y);
+  ctx.lineTo(inner.x + inner.w, y);
+  ctx.stroke();
+  ctx.fillStyle = cssVar('--muted', '#667085');
+  ctx.fillText(label, inner.x + inner.w + 8, y + 4);
+  ctx.restore();
+}
+
+function drawLevels(ctx, inner, scale) {
+  (state.chartData.levels || []).forEach((level) => {
+    if (!isNum(level.price)) return;
+    const y = scale.y(level.price);
+    ctx.save();
+    ctx.strokeStyle = level.type === 'support' ? CHART_COLORS.support : CHART_COLORS.resistance;
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath();
+    ctx.moveTo(inner.x, y);
+    ctx.lineTo(inner.x + inner.w, y);
+    ctx.stroke();
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fillText(`${level.type} ${money(level.price)}`, inner.x + 8, y - 4);
+    ctx.restore();
+  });
+}
+
+function drawTrendlines(ctx, rows, inner, scale) {
+  (state.chartData.trendlines || []).forEach((line) => {
+    const points = (line.points || []).map((point) => ({ x: rowIndexForDate(rows, point.date), y: point.value })).filter((point) => point.x >= 0 && isNum(point.y));
+    if (points.length < 2) return;
+    ctx.strokeStyle = line.type === 'trend_support' ? CHART_COLORS.trendSupport : CHART_COLORS.trendResistance;
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const x = xForIndex(point.x, rows.length, inner);
+      const y = scale.y(point.y);
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+}
+
+function drawChartTitle(ctx, inner) {
+  const summary = state.chartData.summary || {};
+  ctx.fillStyle = cssVar('--ink', '#17212b');
+  ctx.font = '700 15px ui-sans-serif, system-ui';
+  ctx.fillText(`${state.chartData.ticker} ${money(summary.last_close)} ${signed(summary.change_pct, '%')}`, inner.x, 15);
+}
+
+function drawTimeAxis(ctx, rows, inner) {
+  ctx.fillStyle = cssVar('--muted', '#667085');
+  ctx.font = '11px ui-sans-serif, system-ui';
+  const ticks = Math.min(6, rows.length);
+  for (let i = 0; i < ticks; i += 1) {
+    const index = Math.round((rows.length - 1) * (i / Math.max(1, ticks - 1)));
+    const x = xForIndex(index, rows.length, inner);
+    ctx.fillText(shortDate(rows[index].date), x - 28, inner.y + inner.h + 17);
+  }
+}
+
+function drawCrosshair(ctx, rows, panels, width, tooltip) {
+  const inner = chartInner(panels.price, width);
+  const index = Math.max(0, Math.min(rows.length - 1, Math.round(((state.chartHover.x - inner.x) / inner.w) * (rows.length - 1))));
+  const row = rows[index];
+  const x = xForIndex(index, rows.length, inner);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.42)';
+  ctx.setLineDash([3, 3]);
+  Object.values(panels).filter(Boolean).forEach((panel) => {
+    const area = chartInner(panel, width);
+    ctx.beginPath();
+    ctx.moveTo(x, area.y);
+    ctx.lineTo(x, area.y + area.h);
+    ctx.stroke();
+  });
+  ctx.restore();
+  if (tooltip && row) {
+    tooltip.style.display = 'block';
+    tooltip.style.left = `${Math.min(state.chartHover.x + 16, inner.x + inner.w - 220)}px`;
+    tooltip.style.top = `${Math.max(12, state.chartHover.y + 16)}px`;
+    tooltip.innerHTML = `
+      <strong>${escapeHtml(shortDate(row.date))}</strong>
+      <span>O ${money(row.open)} H ${money(row.high)}</span>
+      <span>L ${money(row.low)} C ${money(row.close)}</span>
+      <span>Vol ${compactNumber(row.volume || 0)}</span>
+      ${isNum(row.rsi_14) ? `<span>RSI ${row.rsi_14.toFixed(1)}</span>` : ''}
+    `;
+  }
+}
+
+function drawChartSelection(ctx) {
+  const selection = state.chartSelection;
+  if (!selection) return;
+  const x = Math.min(selection.startX, selection.currentX);
+  const y = Math.min(selection.startY, selection.currentY);
+  const w = Math.abs(selection.currentX - selection.startX);
+  const h = Math.abs(selection.currentY - selection.startY);
+  ctx.save();
+  ctx.fillStyle = 'rgba(37, 99, 235, 0.12)';
+  ctx.strokeStyle = 'rgba(37, 99, 235, 0.72)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 4]);
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
+}
+
+function chartInner(panel, width) {
+  return { x: panel.x, y: panel.y, w: Math.max(120, width - panel.x - 84), h: panel.h };
+}
+
+function valueScale(values, y, h, padRatio = 0.08) {
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) { min = 0; max = 1; }
+  if (min === max) { min -= 1; max += 1; }
+  const pad = (max - min) * padRatio;
+  min -= pad;
+  max += pad;
+  return { min, max, y: (value) => y + h - ((value - min) / (max - min || 1)) * h };
+}
+
+function xForIndex(index, length, inner) {
+  return inner.x + (length <= 1 ? 0 : (index / (length - 1)) * inner.w);
+}
+
+function rowIndexForDate(rows, date) {
+  return rows.findIndex((row) => row.date === date);
+}
+
+function isNum(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function cssVar(name, fallback) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+function money(value) {
+  return isNum(value) ? value.toLocaleString(undefined, { maximumFractionDigits: value >= 100 ? 2 : 4 }) : 'n/a';
+}
+
+function signed(value, suffix = '') {
+  if (!isNum(value)) return 'n/a';
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(2)}${suffix}`;
+}
+
+function compactNumber(value) {
+  if (!isNum(Number(value))) return 'n/a';
+  return Number(value).toLocaleString(undefined, { notation: 'compact', maximumFractionDigits: 2 });
+}
+
+function shortDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
+}
+
+function wireInteractiveChart() {
+  const canvas = $('interactiveChartCanvas');
+  if (!canvas || canvas.dataset.wired === 'true') return;
+  canvas.dataset.wired = 'true';
+  updateChartMouseMode();
+  canvas.addEventListener('wheel', (event) => {
+    if (!state.chartData) return;
+    event.preventDefault();
+    const rows = state.chartData.rows || [];
+    const total = rows.length;
+    if (total < 2) return;
+    const rect = canvas.getBoundingClientRect();
+    const xRatio = Math.max(0, Math.min(1, (event.clientX - rect.left - 58) / Math.max(1, rect.width - 142)));
+    const view = state.chartView;
+    const span = Math.max(12, view.end - view.start + 1);
+    const nextSpan = Math.max(12, Math.min(total, Math.round(span * (event.deltaY > 0 ? 1.18 : 0.84))));
+    const center = view.start + span * xRatio;
+    let start = Math.round(center - nextSpan * xRatio);
+    let end = start + nextSpan - 1;
+    if (start < 0) { end -= start; start = 0; }
+    if (end >= total) { start -= end - total + 1; end = total - 1; }
+    state.chartView = { start: Math.max(0, start), end: Math.min(total - 1, end) };
+    drawInteractiveChart();
+  }, { passive: false });
+  canvas.addEventListener('mousedown', (event) => {
+    if (!state.chartData) return;
+    const rect = canvas.getBoundingClientRect();
+    if ($('chartMouseMode').value === 'box') {
+      state.chartSelection = {
+        startX: event.clientX - rect.left,
+        startY: event.clientY - rect.top,
+        currentX: event.clientX - rect.left,
+        currentY: event.clientY - rect.top,
+      };
+      state.chartDrag = null;
+      drawInteractiveChart();
+      return;
+    }
+    state.chartDrag = { x: event.clientX, start: state.chartView.start, end: state.chartView.end };
+  });
+  window.addEventListener('mouseup', () => {
+    if (state.chartSelection) applyChartBoxZoom();
+    state.chartDrag = null;
+    state.chartSelection = null;
+    drawInteractiveChart();
+  });
+  canvas.addEventListener('mousemove', (event) => {
+    const rect = canvas.getBoundingClientRect();
+    if (state.chartSelection) {
+      state.chartSelection.currentX = event.clientX - rect.left;
+      state.chartSelection.currentY = event.clientY - rect.top;
+    } else if (state.chartDrag && state.chartData) {
+      const rows = state.chartData.rows || [];
+      const span = state.chartDrag.end - state.chartDrag.start + 1;
+      const barWidth = Math.max(1, (rect.width - 142) / Math.max(1, span));
+      const shift = Math.round((state.chartDrag.x - event.clientX) / barWidth);
+      let start = state.chartDrag.start + shift;
+      let end = state.chartDrag.end + shift;
+      if (start < 0) { end -= start; start = 0; }
+      if (end >= rows.length) { start -= end - rows.length + 1; end = rows.length - 1; }
+      state.chartView = { start: Math.max(0, start), end: Math.max(0, end) };
+    }
+    state.chartHover = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    drawInteractiveChart();
+  });
+  canvas.addEventListener('mouseleave', () => {
+    state.chartHover = null;
+    state.chartDrag = null;
+    if (!state.chartSelection) drawInteractiveChart();
+  });
+  window.addEventListener('resize', () => {
+    if (state.currentTab === 'chart') drawInteractiveChart();
+  });
+}
+
+function updateChartMouseMode() {
+  const canvas = $('interactiveChartCanvas');
+  if (!canvas) return;
+  const mode = $('chartMouseMode').value;
+  canvas.classList.toggle('pan-mode', mode === 'pan');
+  canvas.classList.toggle('box-mode', mode === 'box');
+  state.chartDrag = null;
+  state.chartSelection = null;
+}
+
+function applyChartBoxZoom() {
+  if (!state.chartData || !state.chartSelection) return;
+  const canvas = $('interactiveChartCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const rows = visibleChartRows();
+  if (rows.length < 2) return;
+  const inner = { x: 58, w: Math.max(120, rect.width - 58 - 84) };
+  const left = Math.max(inner.x, Math.min(state.chartSelection.startX, state.chartSelection.currentX));
+  const right = Math.min(inner.x + inner.w, Math.max(state.chartSelection.startX, state.chartSelection.currentX));
+  if (right - left < 24) return;
+  const startOffset = Math.floor(((left - inner.x) / inner.w) * (rows.length - 1));
+  const endOffset = Math.ceil(((right - inner.x) / inner.w) * (rows.length - 1));
+  const currentStart = state.chartView.start;
+  const start = Math.max(0, currentStart + startOffset);
+  const end = Math.min((state.chartData.rows || []).length - 1, currentStart + Math.max(startOffset + 1, endOffset));
+  if (end > start) state.chartView = { start, end };
 }
 
 async function createJob(payload) {
@@ -998,6 +2030,69 @@ async function runLlmAction(path, pendingMessage) {
   }
 }
 
+async function runLlmDiagnostic(kind) {
+  const status = $('llmDiagnosticStatus');
+  const result = $('llmDiagnosticResult');
+  const simpleButton = $('runSimpleLlmTest');
+  const toolButton = $('runToolLlmTest');
+  status.textContent = `Running ${kind === 'simple' ? 'simple query' : 'tool format'} diagnostic...`;
+  simpleButton.disabled = true;
+  toolButton.disabled = true;
+  try {
+    const data = await (await api('/api/llm/diagnostic', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind }),
+    })).json();
+    renderLlmDiagnostic(data);
+  } catch (error) {
+    result.className = 'llm-diagnostic-grid';
+    result.innerHTML = `
+      <div class="diagnostic-box">
+        <h4>Error</h4>
+        <pre>${escapeHtml(error.message)}</pre>
+      </div>
+    `;
+    status.textContent = 'Diagnostic request failed.';
+  } finally {
+    simpleButton.disabled = false;
+    toolButton.disabled = false;
+  }
+}
+
+function renderLlmDiagnostic(data) {
+  const check = data.format_check || {};
+  const ok = data.ok && check.ok;
+  const rawOutput = typeof data.raw_output === 'string'
+    ? data.raw_output
+    : JSON.stringify(data.raw_output || { error: data.error || 'No raw output.' }, null, 2);
+  $('llmDiagnosticStatus').innerHTML = `
+    <span class="badge ${ok ? 'completed' : 'failed'}">${ok ? 'passed' : 'check output'}</span>
+    ${escapeHtml(check.message || data.error || 'Diagnostic finished.')}
+  `;
+  $('llmDiagnosticResult').className = 'llm-diagnostic-grid';
+  $('llmDiagnosticResult').innerHTML = `
+    <div class="diagnostic-box diagnostic-input">
+      <h4>Raw Input To LLM</h4>
+      <pre>${escapeHtml(JSON.stringify(data.raw_input || {}, null, 2))}</pre>
+    </div>
+    <div class="diagnostic-results">
+      <div class="diagnostic-box diagnostic-output">
+        <h4>Raw Output From LLM</h4>
+        <pre>${escapeHtml(rawOutput)}</pre>
+      </div>
+      <div class="diagnostic-box diagnostic-model-text">
+        <h4>Model Text</h4>
+        <pre>${escapeHtml(data.model_text || '')}</pre>
+      </div>
+      <div class="diagnostic-box diagnostic-format-check">
+        <h4>Format Check</h4>
+        <pre>${escapeHtml(JSON.stringify(data.format_check || {}, null, 2))}</pre>
+      </div>
+    </div>
+  `;
+}
+
 
 async function shutdownServer() {
   const confirmed = window.confirm('Stop the local market-signal-scanner GUI server? You will need to restart it from Terminal to use the GUI again.');
@@ -1014,6 +2109,8 @@ async function shutdownServer() {
 
 function wireActions() {
   wireTabLinks();
+  wireInteractiveChart();
+  wireOpportunityMap();
   wireNewsAction();
   $('runTrendCatcher').addEventListener('click', startTrendCatcherFromUi);
   $('resetAgent').addEventListener('click', resetAgentConversation);
@@ -1027,6 +2124,34 @@ function wireActions() {
   });
   $('runScan').addEventListener('click', () => createJob({ command: 'scan', skip_fundamentals: $('scanSkipFundamentals').checked }));
   $('runBacktest').addEventListener('click', () => createJob({ command: 'backtest' }));
+  $('refreshOpportunityMap').addEventListener('click', loadOpportunityMap);
+  $('opportunityLeaderboard').addEventListener('click', (event) => {
+    const target = event.target.closest('[data-ticker]');
+    if (target) selectOpportunityTicker(target.dataset.ticker);
+  });
+  $('opportunityHeatmap').addEventListener('click', (event) => {
+    const target = event.target.closest('[data-ticker]');
+    if (target) selectOpportunityTicker(target.dataset.ticker);
+  });
+  $('loadInteractiveChart').addEventListener('click', loadInteractiveChart);
+  $('resetInteractiveChart').addEventListener('click', resetInteractiveChart);
+  $('chartPeriod').addEventListener('change', () => {
+    applyPeriodDefaults();
+    loadInteractiveChart();
+  });
+  ['chartInterval', 'chartType', 'showBollinger', 'showLevels', 'showTrendlines', 'showVolume', 'showRsi', 'showMacd'].forEach((id) => {
+    $(id).addEventListener('change', loadInteractiveChart);
+  });
+  $('chartMouseMode').addEventListener('change', () => {
+    updateChartMouseMode();
+    drawInteractiveChart();
+  });
+  ['showSma', 'showEma'].forEach((id) => {
+    $(id).addEventListener('change', drawInteractiveChart);
+  });
+  $('chartTicker').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') loadInteractiveChart();
+  });
   $('runChart').addEventListener('click', () => createJob({
     command: 'chart',
     ticker: $('chartTicker').value.trim(),
@@ -1035,11 +2160,11 @@ function wireActions() {
     chart_type: $('chartType').value,
     lookback: Number($('chartLookback').value || 180),
     moving_averages: $('chartMa').value.trim() || '20,50,100,200',
-    no_support_resistance: $('hideSR').checked,
-    no_bollinger: $('hideBollinger').checked,
-    no_volume: $('hideVolume').checked,
-    no_rsi: $('hideRsi').checked,
-    no_macd: $('hideMacd').checked,
+    no_support_resistance: !($('showLevels').checked || $('showTrendlines').checked),
+    no_bollinger: !$('showBollinger').checked,
+    no_volume: !$('showVolume').checked,
+    no_rsi: !$('showRsi').checked,
+    no_macd: !$('showMacd').checked,
   }));
   $('refreshRunProgress').addEventListener('click', loadRunProgress);
   $('refreshRuns').addEventListener('click', loadRuns);
@@ -1050,6 +2175,8 @@ function wireActions() {
   $('refreshLlm').addEventListener('click', loadLlmStatus);
   $('startLlm').addEventListener('click', startLlm);
   $('stopLlm').addEventListener('click', stopLlm);
+  $('runSimpleLlmTest').addEventListener('click', () => runLlmDiagnostic('simple'));
+  $('runToolLlmTest').addEventListener('click', () => runLlmDiagnostic('tool'));
   $('loadConfig').addEventListener('click', loadConfig);
   $('saveConfig').addEventListener('click', saveConfig);
   $('shutdownServer').addEventListener('click', shutdownServer);

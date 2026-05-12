@@ -20,6 +20,7 @@ import yfinance as yf
 from market_signal_scanner.config_loader import NewsSummaryConfig, ScannerConfig
 from market_signal_scanner.data_fetcher import Cache, fetch_fundamentals, fetch_price_history, safe_name
 from market_signal_scanner.indicators import compute_signals
+from market_signal_scanner.llm_utils import clean_llm_response
 from market_signal_scanner.prompt_loader import load_prompt
 from market_signal_scanner.scorer import score_universe
 
@@ -265,7 +266,8 @@ def call_ollama(news_config: NewsSummaryConfig, prompt: str) -> str:
         "model": news_config.model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": news_config.temperature},
+        "think": False,
+        "options": {"temperature": news_config.temperature, "num_ctx": 8192},
     }
     response = requests.post(
         f"{news_config.base_url}/api/generate",
@@ -274,7 +276,7 @@ def call_ollama(news_config: NewsSummaryConfig, prompt: str) -> str:
     )
     response.raise_for_status()
     data = response.json()
-    text = str(data.get("response") or "").strip()
+    text = clean_llm_response(data.get("response") or "")
     if not text:
         raise RuntimeError("Ollama returned an empty response")
     return text

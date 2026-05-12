@@ -37,6 +37,91 @@ class ChartResult:
     signals: dict[str, Any]
 
 
+def build_interactive_chart_payload(
+    prices: pd.DataFrame,
+    options: ChartOptions,
+) -> dict[str, Any]:
+    full_frame = prepare_price_frame(prices)
+    if full_frame.empty or len(full_frame) < 30:
+        raise ValueError(f"Not enough price history to chart {options.ticker}")
+
+    frame = full_frame.tail(max(30, options.lookback)).copy()
+    overlays = build_chart_overlays(full_frame, frame, options)
+    scored = score_universe(pd.DataFrame([compute_signals(options.ticker, full_frame, {})]))
+    signals = scored.iloc[0].to_dict() if not scored.empty else compute_signals(options.ticker, full_frame, {})
+    latest = frame.iloc[-1]
+    previous_close = frame["Close"].iloc[-2] if len(frame) > 1 else np.nan
+    change = float(latest["Close"] - previous_close) if pd.notna(previous_close) else 0.0
+    change_pct = float(change / previous_close * 100) if pd.notna(previous_close) and previous_close else 0.0
+    return {
+        "ticker": options.ticker,
+        "chart_type": options.chart_type,
+        "rows": [
+            {
+                "date": index.isoformat(),
+                "open": none_if_nan(row["Open"]),
+                "high": none_if_nan(row["High"]),
+                "low": none_if_nan(row["Low"]),
+                "close": none_if_nan(row["Close"]),
+                "volume": none_if_nan(row["Volume"]),
+                **{name: none_if_nan(series.loc[index]) for name, series in overlays["series"].items()},
+            }
+            for index, row in frame.iterrows()
+        ],
+        "levels": overlays["levels"],
+        "trendlines": overlays["trendlines"],
+        "signals": json_safe_dict(signals),
+        "summary": {
+            "last_close": none_if_nan(latest["Close"]),
+            "change": none_if_nan(change),
+            "change_pct": none_if_nan(change_pct),
+            "last_volume": none_if_nan(latest.get("Volume", np.nan)),
+            "start": frame.index[0].isoformat(),
+            "end": frame.index[-1].isoformat(),
+            "bars": len(frame),
+        },
+    }
+
+
+def build_chart_overlays(full_frame: pd.DataFrame, frame: pd.DataFrame, options: ChartOptions) -> dict[str, Any]:
+    series: dict[str, pd.Series] = {}
+    for window in options.moving_averages:
+        if window > 1 and len(full_frame) >= window:
+            series[f"sma_{window}"] = full_frame["Close"].rolling(window).mean().reindex(frame.index)
+    if len(full_frame) >= 20:
+        series["ema_20"] = full_frame["Close"].ewm(span=20, adjust=False).mean().reindex(frame.index)
+    if len(full_frame) >= 50:
+        series["ema_50"] = full_frame["Close"].ewm(span=50, adjust=False).mean().reindex(frame.index)
+    if options.show_bollinger and len(full_frame) >= 20:
+        mid = full_frame["Close"].rolling(20).mean().reindex(frame.index)
+        std = full_frame["Close"].rolling(20).std().reindex(frame.index)
+        series["bb_mid"] = mid
+        series["bb_upper"] = mid + 2 * std
+        series["bb_lower"] = mid - 2 * std
+    if options.show_rsi:
+        series["rsi_14"] = rsi(full_frame["Close"], 14).reindex(frame.index)
+    if options.show_macd:
+        macd_line, signal_line, hist = macd(full_frame["Close"])
+        series["macd"] = macd_line.reindex(frame.index)
+        series["macd_signal"] = signal_line.reindex(frame.index)
+        series["macd_hist"] = hist.reindex(frame.index)
+
+    levels = support_resistance_levels(frame) if options.show_support_resistance else []
+    trendlines = []
+    if options.show_support_resistance:
+        for line in diagonal_trendlines(frame):
+            trendlines.append({
+                "type": line["type"],
+                "label": line["label"],
+                "short_label": line["short_label"],
+                "points": [
+                    {"date": date.isoformat(), "value": none_if_nan(value)}
+                    for date, value in zip(line["dates"], line["values"])
+                ],
+            })
+    return {"series": series, "levels": json_safe_list(levels), "trendlines": trendlines}
+
+
 def generate_chart_report(prices: pd.DataFrame, options: ChartOptions, output_base: str | Path) -> ChartResult:
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
@@ -155,6 +240,33 @@ def generate_chart_report(prices: pd.DataFrame, options: ChartOptions, output_ba
     report_path = output_dir / "chart_report.md"
     report_path.write_text(build_chart_report(options, signals, levels, trendlines), encoding="utf-8")
     return ChartResult(output_dir, chart_path, report_path, signals)
+
+
+def none_if_nan(value: Any) -> float | int | str | None:
+    if value is None:
+        return None
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.isoformat()
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        if not np.isfinite(value):
+            return None
+        return float(value)
+    return value
+
+
+def json_safe_dict(values: dict[str, Any]) -> dict[str, Any]:
+    return {str(key): none_if_nan(value) for key, value in values.items()}
+
+
+def json_safe_list(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [json_safe_dict(value) for value in values]
 
 
 def prepare_price_frame(prices: pd.DataFrame) -> pd.DataFrame:

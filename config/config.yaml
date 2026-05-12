@@ -217,8 +217,8 @@ news_summary:
   # Ollama model name. Pull/start this model locally before using the LLM path:
   # ollama pull gpt-oss:20b
   # model: "gpt-oss:2"
-  # ollama pull qwen3:14b
-  model: "qwen3:14b"
+  # ollama pull qwen3.5:9b
+  model: "qwen3.5:9b"
 
   # Local Ollama server URL.
   base_url: "http://127.0.0.1:11434"
@@ -248,7 +248,7 @@ news_summary:
 # This powers the GUI Agent tab for deeper web research and follow-up Q&A.
 agent:
   provider: "ollama"
-  model: "gpt-oss:20b"
+  model: "qwen3.5:9b"
   base_url: "http://127.0.0.1:11434"
   temperature: 0.2
   timeout_seconds: 240
@@ -281,7 +281,7 @@ agent:
 # Intended for quick 10-15 minute checks. Higher alert_threshold = fewer alerts.
 oracle:
   provider: "ollama"
-  model: "gpt-oss:20b"
+  model: "qwen3.5:9b"
   base_url: "http://127.0.0.1:11434"
   temperature: 0.15
   timeout_seconds: 300

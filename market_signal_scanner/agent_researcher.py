@@ -23,6 +23,7 @@ from bs4 import BeautifulSoup
 from market_signal_scanner.config_loader import AgentConfig, ScannerConfig
 from market_signal_scanner.data_fetcher import Cache, fetch_fundamentals, fetch_price_history, safe_name
 from market_signal_scanner.indicators import compute_signals
+from market_signal_scanner.llm_utils import clean_llm_response, extract_json_object as robust_extract_json_object
 from market_signal_scanner.news_summary import compact_fundamentals, compact_signals
 from market_signal_scanner.prompt_loader import load_prompt
 from market_signal_scanner.scorer import score_universe
@@ -438,7 +439,8 @@ def call_ollama(agent_config: AgentConfig, prompt: str) -> str:
         "model": agent_config.model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": agent_config.temperature},
+        "think": False,
+        "options": {"temperature": agent_config.temperature, "num_ctx": 8192},
     }
     last_empty = False
     for attempt in range(2):
@@ -449,7 +451,7 @@ def call_ollama(agent_config: AgentConfig, prompt: str) -> str:
         )
         response.raise_for_status()
         data = response.json()
-        text = str(data.get("response") or "").strip()
+        text = clean_llm_response(data.get("response") or "")
         if text:
             return text
         last_empty = True
@@ -1011,10 +1013,7 @@ def dedupe_evidence(evidence: list[AgentEvidence]) -> list[AgentEvidence]:
 
 
 def extract_json_object(text: str) -> str:
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        raise ValueError("LLM did not return a JSON object")
-    return match.group(0)
+    return robust_extract_json_object(text)
 
 
 def clean_text(value: str) -> str:

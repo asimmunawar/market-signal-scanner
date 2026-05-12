@@ -27,6 +27,7 @@ from market_signal_scanner.agent_researcher import (
     short_preview,
 )
 from market_signal_scanner.config_loader import ScannerConfig
+from market_signal_scanner.llm_utils import extract_json_object
 from market_signal_scanner.prompt_loader import load_prompt
 
 
@@ -61,6 +62,9 @@ class TrendCatcherState(TypedDict, total=False):
     llm_calls: list[dict[str, Any]]
     llm_error: str
     generated_at: str
+    previous_run: dict[str, Any]
+    scanner_snapshot: dict[str, Any]
+    watchlist_tickers: list[str]
 
 
 class TrendCatcherRunner:
@@ -90,6 +94,9 @@ class TrendCatcherRunner:
             "llm_calls": [],
             "llm_error": "",
             "generated_at": current_datetime_text(),
+            "previous_run": load_previous_trend_catcher_context(Path(output_base)),
+            "scanner_snapshot": load_latest_scanner_snapshot(Path(output_base), config),
+            "watchlist_tickers": list(config.tickers),
         }
         final_state = self._run_graph(state)
         final_state["events"] = self.events
@@ -267,6 +274,10 @@ class TrendCatcherRunner:
             source_lookback_hours=config.oracle.source_lookback_hours,
             market_pulse_text=format_market_pulse(state.get("market_pulse", [])),
             evidence_text=format_evidence(state.get("evidence", [])),
+            previous_run_text=format_previous_run(state.get("previous_run", {})),
+            watchlist_text=format_watchlist_context(state.get("watchlist_tickers", []), state.get("scanner_snapshot", {})),
+            scanner_snapshot_text=format_scanner_snapshot(state.get("scanner_snapshot", {})),
+            source_freshness_text=format_source_freshness(state.get("evidence", [])),
         )
         self.progress("thought", "Synthesizing Trend Catcher alert threshold decision.", evidence_count=len(state.get("evidence", [])))
         try:
@@ -316,6 +327,172 @@ def search_recent_trend_catcher_sources(query: str, config: ScannerConfig) -> tu
     return dedupe_by_url(results), " ".join(notes)
 
 
+def load_previous_trend_catcher_context(output_base: Path) -> dict[str, Any]:
+    root = output_base / "trend-catcher"
+    if not root.exists():
+        return {}
+    for path in sorted(root.glob("*/trend_catcher_context.json"), reverse=True):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            report = str(payload.get("report", "")).strip()
+            return {
+                "run_id": path.parent.name,
+                "generated_at": payload.get("generated_at", ""),
+                "report_excerpt": report[:2600],
+                "source_count": len(payload.get("evidence", [])),
+                "market_pulse_count": len(payload.get("market_pulse", [])),
+            }
+        except Exception as exc:
+            LOGGER.debug("Could not read previous Trend Catcher context %s: %s", path, exc)
+    return {}
+
+
+def load_latest_scanner_snapshot(output_base: Path, config: ScannerConfig) -> dict[str, Any]:
+    root = output_base / "scans"
+    if not root.exists():
+        return {}
+    runs = sorted([path for path in root.iterdir() if path.is_dir()], reverse=True)
+    latest = next((path for path in runs if (path / "ranked_signals.csv").exists()), None)
+    if latest is None:
+        return {}
+    previous = next((path for path in runs if path != latest and (path / "ranked_signals.csv").exists()), None)
+    try:
+        frame = pd.read_csv(latest / "ranked_signals.csv")
+    except Exception as exc:
+        LOGGER.debug("Could not read latest scanner snapshot %s: %s", latest, exc)
+        return {}
+    snapshot = {
+        "run_id": latest.name,
+        "top_buy": scanner_rows(frame.sort_values("score", ascending=False).head(8)),
+        "top_avoid": scanner_rows(frame.sort_values("score", ascending=True).head(8)),
+        "watchlist": scanner_rows(frame[frame["ticker"].astype(str).isin(set(config.tickers))].sort_values("score", ascending=False).head(20)),
+        "score_changes": [],
+    }
+    if previous is not None:
+        try:
+            prior = pd.read_csv(previous / "ranked_signals.csv")
+            snapshot["previous_run_id"] = previous.name
+            snapshot["score_changes"] = score_change_rows(frame, prior)
+        except Exception as exc:
+            LOGGER.debug("Could not compare scanner snapshot %s: %s", previous, exc)
+    return snapshot
+
+
+def scanner_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    columns = [
+        "ticker",
+        "entity_name",
+        "last_price",
+        "return_1d",
+        "return_5d",
+        "return_1m",
+        "rsi_14",
+        "volume_spike",
+        "score",
+        "recommendation",
+    ]
+    rows: list[dict[str, Any]] = []
+    for _, row in frame.iterrows():
+        item: dict[str, Any] = {}
+        for column in columns:
+            value = row.get(column, "")
+            if pd.isna(value):
+                value = ""
+            if isinstance(value, float):
+                value = round(value, 4)
+            item[column] = value
+        rows.append(item)
+    return rows
+
+
+def score_change_rows(current: pd.DataFrame, previous: pd.DataFrame, limit: int = 8) -> list[dict[str, Any]]:
+    if "ticker" not in current.columns or "score" not in current.columns or "ticker" not in previous.columns or "score" not in previous.columns:
+        return []
+    merged = current[["ticker", "score", "recommendation"]].merge(
+        previous[["ticker", "score", "recommendation"]],
+        on="ticker",
+        how="inner",
+        suffixes=("", "_previous"),
+    )
+    if merged.empty:
+        return []
+    merged["score_change"] = pd.to_numeric(merged["score"], errors="coerce") - pd.to_numeric(merged["score_previous"], errors="coerce")
+    movers = pd.concat([
+        merged.sort_values("score_change", ascending=False).head(limit // 2),
+        merged.sort_values("score_change", ascending=True).head(limit // 2),
+    ]).drop_duplicates(subset=["ticker"])
+    rows: list[dict[str, Any]] = []
+    for _, row in movers.iterrows():
+        rows.append({
+            "ticker": row.get("ticker", ""),
+            "score": round(float(row.get("score", 0)), 2),
+            "previous_score": round(float(row.get("score_previous", 0)), 2),
+            "score_change": round(float(row.get("score_change", 0)), 2),
+            "recommendation": row.get("recommendation", ""),
+            "previous_recommendation": row.get("recommendation_previous", ""),
+        })
+    return rows
+
+
+def format_previous_run(previous: dict[str, Any]) -> str:
+    if not previous:
+        return "No previous Trend Catcher run was found."
+    return (
+        f"Previous run: {previous.get('run_id')} generated {previous.get('generated_at')}. "
+        f"Sources: {previous.get('source_count')}; market pulse rows: {previous.get('market_pulse_count')}.\n\n"
+        f"Previous report excerpt:\n{previous.get('report_excerpt', '')}"
+    )
+
+
+def format_watchlist_context(tickers: list[str], scanner_snapshot: dict[str, Any]) -> str:
+    if not tickers:
+        return "No configured tickers are available for watchlist impact."
+    visible = ", ".join(tickers[:120])
+    suffix = " ..." if len(tickers) > 120 else ""
+    rows = scanner_snapshot.get("watchlist", []) if scanner_snapshot else []
+    scored = format_compact_rows(rows, ["ticker", "score", "recommendation", "return_1d", "return_5d", "rsi_14"], limit=20)
+    return f"Configured tickers/watchlist context: {visible}{suffix}\n\nLatest scored watchlist rows:\n{scored}"
+
+
+def format_scanner_snapshot(snapshot: dict[str, Any]) -> str:
+    if not snapshot:
+        return "No recent scanner output was found. Do not invent top buy/watch/avoid ideas."
+    return "\n\n".join([
+        f"Latest scanner run: {snapshot.get('run_id')}",
+        f"Previous scanner run: {snapshot.get('previous_run_id', 'not available')}",
+        "Top buy/watch candidates:\n" + format_compact_rows(snapshot.get("top_buy", []), ["ticker", "score", "recommendation", "return_1d", "return_5d", "rsi_14"], limit=8),
+        "Top avoid/sell candidates:\n" + format_compact_rows(snapshot.get("top_avoid", []), ["ticker", "score", "recommendation", "return_1d", "return_5d", "rsi_14"], limit=8),
+        "Largest scanner score changes:\n" + format_compact_rows(snapshot.get("score_changes", []), ["ticker", "score", "previous_score", "score_change", "recommendation", "previous_recommendation"], limit=8),
+    ])
+
+
+def format_compact_rows(rows: list[dict[str, Any]], columns: list[str], limit: int = 10) -> str:
+    if not rows:
+        return "- none available"
+    lines: list[str] = []
+    for row in rows[:limit]:
+        parts = [f"{column}={row.get(column, '')}" for column in columns if row.get(column, "") != ""]
+        lines.append("- " + ", ".join(parts))
+    return "\n".join(lines)
+
+
+def format_source_freshness(evidence: list[AgentEvidence], limit: int = 12) -> str:
+    if not evidence:
+        return "No usable fresh sources were retained."
+    lines = ["| # | Source | Published | Freshness |", "|---|---|---|---|"]
+    for index, item in enumerate(evidence[:limit], 1):
+        title = item.title.replace("|", "-")[:90]
+        lines.append(f"| {index} | {title} | {item.published_at or 'unknown'} | {item.freshness_status or 'unknown'} |")
+    return "\n".join(lines)
+
+
+def append_source_freshness_table(report: str, state: TrendCatcherState) -> str:
+    if "## Source Freshness" in report:
+        return report
+    table = format_source_freshness(state.get("evidence", []), limit=10)
+    return report.rstrip() + "\n\n## Source Freshness\n\n" + table + "\n"
+
+
 def summarize_trend_catcher_source(item: AgentEvidence, state: TrendCatcherState) -> str:
     config = state["config"]
     prompt = render_trend_catcher_prompt(
@@ -347,6 +524,7 @@ def write_trend_catcher_outputs(state: TrendCatcherState) -> TrendCatcherResult:
     evidence = state.get("evidence", [])
     report = state.get("report", "")
     report = with_trend_catcher_timestamp(report, state)
+    report = append_source_freshness_table(report, state)
     if state.get("llm_error"):
         report += f"\n\n## Trend Catcher Runtime Note\n\nLLM fallback/error: `{state['llm_error']}`\n"
     report_path.write_text(report, encoding="utf-8")
@@ -378,6 +556,9 @@ def write_trend_catcher_outputs(state: TrendCatcherState) -> TrendCatcherResult:
         "report": report,
         "evidence": [item.__dict__ for item in evidence],
         "market_pulse": market_pulse,
+        "previous_run": state.get("previous_run", {}),
+        "scanner_snapshot": state.get("scanner_snapshot", {}),
+        "watchlist_tickers": state.get("watchlist_tickers", []),
         "events": state.get("events", []),
         "llm_calls": state.get("llm_calls", []),
         "llm_error": state.get("llm_error", ""),
@@ -637,11 +818,7 @@ def filter_recent_trend_catcher_evidence(items: list[AgentEvidence], config: Sca
 
 
 def extract_json(text: str) -> str:
-    import re
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        raise ValueError("LLM did not return a JSON object")
-    return match.group(0)
+    return extract_json_object(text)
 
 
 def fallback_trend_catcher_report(state: TrendCatcherState) -> str:

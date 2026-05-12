@@ -6,7 +6,7 @@
   <title>market-signal-scanner</title>
   <link rel="icon" type="image/png" href="/static/assets/app-icon-small.png" />
   <link rel="apple-touch-icon" href="/static/assets/app-icon.png" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260428-themes" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260502-opportunity-map" />
   <link rel="stylesheet" href="/api/ui/theme.css?v=20260428-themes" />
 </head>
 <body>
@@ -22,7 +22,8 @@
       <nav class="nav">
         <button class="nav-button active" data-tab="home">Home</button>
         <button class="nav-button" data-tab="run">Scanner</button>
-        <button class="nav-button" data-tab="chart">Chart</button>
+        <button class="nav-button" data-tab="opportunity">Opportunity Map</button>
+        <button class="nav-button" data-tab="chart">Charts</button>
         <button class="nav-button" data-tab="news">News Summary</button>
         <button class="nav-button" data-tab="agent">Agent</button>
         <button class="nav-button" data-tab="trend-catcher">Trend Catcher</button>
@@ -67,6 +68,11 @@
             <h3>Scanner</h3>
             <p>Rank your configured universe with trend, momentum, risk, valuation, and quality signals.</p>
             <button class="home-card-link" type="button" data-go-tab="run">Open Run</button>
+          </section>
+          <section class="home-card">
+            <h3>Opportunity Map</h3>
+            <p>See your latest scan as a risk/reward map, leaderboard, and momentum heatmap.</p>
+            <button class="home-card-link" type="button" data-go-tab="opportunity">Open Map</button>
           </section>
           <section class="home-card">
             <h3>Trend Catcher</h3>
@@ -131,32 +137,150 @@
         <section id="runReportPreview" class="panel preview empty">Run a scan or backtest to preview the Markdown report here.</section>
       </section>
 
+      <section id="tab-opportunity" class="tab">
+        <div class="page-head">
+          <div>
+            <h2>Opportunity Map</h2>
+            <p>Visualize the latest scan across score, risk, momentum, asset type, and recommendation.</p>
+          </div>
+          <button id="refreshOpportunityMap" class="ghost">Refresh</button>
+        </div>
+
+        <section class="opportunity-summary" id="opportunitySummary">
+          <div class="muted">Run a scan first, then refresh this map.</div>
+        </section>
+
+        <section class="panel opportunity-workspace">
+          <div class="opportunity-toolbar">
+            <label>Asset Type
+              <select id="opportunityAssetType">
+                <option value="all">All</option>
+                <option value="Stock">Stocks</option>
+                <option value="ETF">ETFs</option>
+                <option value="Crypto">Crypto</option>
+              </select>
+            </label>
+            <label>Recommendation
+              <select id="opportunityRecommendation">
+                <option value="all">All</option>
+                <option value="Strong Buy">Strong Buy</option>
+                <option value="Buy">Buy</option>
+                <option value="Hold">Hold</option>
+                <option value="Sell">Sell</option>
+                <option value="Strong Sell">Strong Sell</option>
+              </select>
+            </label>
+            <label>X Axis
+              <select id="opportunityXAxis">
+                <option value="risk">Risk Composite</option>
+                <option value="volatility_annual">Volatility</option>
+                <option value="max_drawdown">Max Drawdown</option>
+                <option value="rsi_14">RSI</option>
+              </select>
+            </label>
+            <label>Y Axis
+              <select id="opportunityYAxis">
+                <option value="score">Scanner Score</option>
+                <option value="opportunity">Opportunity Quality</option>
+                <option value="return_1m">1M Return</option>
+                <option value="return_3m">3M Return</option>
+                <option value="sharpe_like">Sharpe-like</option>
+              </select>
+            </label>
+            <label>Min Score
+              <input id="opportunityMinScore" type="number" value="-100" min="-100" max="100" step="5" />
+            </label>
+          </div>
+
+          <div class="opportunity-layout">
+            <div class="opportunity-main">
+              <div class="opportunity-canvas-wrap">
+                <canvas id="opportunityCanvas" class="opportunity-canvas"></canvas>
+                <div id="opportunityTooltip" class="chart-tooltip"></div>
+              </div>
+              <div id="opportunityStatus" class="hint">Loading latest scan...</div>
+            </div>
+            <aside class="opportunity-detail" id="opportunityDetail">
+              <div class="muted">Click a bubble or leaderboard row to inspect a ticker.</div>
+            </aside>
+          </div>
+        </section>
+
+        <div class="grid two">
+          <section class="panel">
+            <h3>Opportunity Leaderboard</h3>
+            <div id="opportunityLeaderboard" class="opportunity-list muted">No data loaded.</div>
+          </section>
+          <section class="panel">
+            <h3>Momentum Rotation Board</h3>
+            <div id="opportunityHeatmap" class="opportunity-heatmap muted">No data loaded.</div>
+          </section>
+        </div>
+      </section>
+
       <section id="tab-chart" class="tab">
         <div class="page-head">
           <div>
-            <h2>Ticker Chart</h2>
-            <p>Create a marked-up chart with candles, MAs, Bollinger bands, horizontal levels, diagonal trendlines, RSI, MACD, and volume.</p>
+            <h2>Interactive Chart</h2>
+            <p>Explore ticker price action with zoom, pan, crosshair, overlays, and technical panels.</p>
           </div>
         </div>
-        <section class="panel">
-          <div class="form-grid">
+        <section class="panel chart-workspace">
+          <div class="chart-toolbar">
             <label>Ticker<input id="chartTicker" value="AAPL" /></label>
-            <label>Period<input id="chartPeriod" value="2y" /></label>
-            <label>Interval<input id="chartInterval" value="1d" /></label>
-            <label>Lookback<input id="chartLookback" type="number" value="180" min="30" /></label>
-            <label>Chart Type<select id="chartType"><option value="candle">Candles</option><option value="line">Line</option></select></label>
-            <label>Moving Averages<input id="chartMa" value="20,50,100,200" /></label>
+            <label>Period<select id="chartPeriod">
+              <option value="5d">5D</option>
+              <option value="1mo">1M</option>
+              <option value="3mo">3M</option>
+              <option value="6mo">6M</option>
+              <option value="1y" selected>1Y</option>
+              <option value="2y">2Y</option>
+              <option value="5y">5Y</option>
+              <option value="max">Max</option>
+            </select></label>
+            <label>Interval<select id="chartInterval">
+              <option value="5m">5m</option>
+              <option value="15m">15m</option>
+              <option value="30m">30m</option>
+              <option value="1h">1h</option>
+              <option value="1d" selected>1D</option>
+              <option value="1wk">1W</option>
+              <option value="1mo">1M</option>
+            </select></label>
+            <label>Type<select id="chartType"><option value="candle">Candles</option><option value="line">Line</option></select></label>
+            <label>Bars<input id="chartLookback" type="number" value="260" min="30" max="5000" /></label>
+            <label>MA<input id="chartMa" value="20,50,100,200" /></label>
+            <label>Mouse<select id="chartMouseMode"><option value="pan">Pan</option><option value="box">Box Zoom</option></select></label>
+            <button id="loadInteractiveChart" class="primary" type="button">Load</button>
+            <button id="resetInteractiveChart" class="ghost" type="button">Reset View</button>
           </div>
-          <div class="checks">
-            <label><input id="hideSR" type="checkbox" /> Hide support/resistance</label>
-            <label><input id="hideBollinger" type="checkbox" /> Hide Bollinger</label>
-            <label><input id="hideVolume" type="checkbox" /> Hide volume</label>
-            <label><input id="hideRsi" type="checkbox" /> Hide RSI</label>
-            <label><input id="hideMacd" type="checkbox" /> Hide MACD</label>
+          <div class="checks chart-checks">
+            <label><input id="showSma" type="checkbox" checked /> SMA</label>
+            <label><input id="showEma" type="checkbox" checked /> EMA</label>
+            <label><input id="showBollinger" type="checkbox" /> Bollinger</label>
+            <label><input id="showLevels" type="checkbox" checked /> Levels</label>
+            <label><input id="showTrendlines" type="checkbox" checked /> Trendlines</label>
+            <label><input id="showVolume" type="checkbox" checked /> Volume</label>
+            <label><input id="showRsi" type="checkbox" checked /> RSI</label>
+            <label><input id="showMacd" type="checkbox" checked /> MACD</label>
           </div>
-          <button id="runChart" class="primary">Generate Chart</button>
+          <div id="chartLegend" class="chart-legend"></div>
+          <div class="chart-shell">
+            <canvas id="interactiveChartCanvas" class="interactive-chart" width="1400" height="760"></canvas>
+            <div id="interactiveChartTooltip" class="chart-tooltip"></div>
+          </div>
+          <div id="interactiveChartStatus" class="status-line"></div>
         </section>
-        <section id="chartPreview" class="panel preview empty">No chart generated in this session yet.</section>
+        <section class="panel">
+          <div class="panel-title-row">
+            <div>
+              <h3>Static Chart Report</h3>
+              <p class="compact">Generates a saved PNG and Markdown chart report in <code>output/charts/&lt;timestamp&gt;_&lt;TICKER&gt;/</code>.</p>
+            </div>
+            <button id="runChart" class="primary">Generate Static Report</button>
+          </div>
+        </section>
+        <section id="chartPreview" class="panel preview empty">No static chart report generated in this session yet.</section>
       </section>
 
       <section id="tab-news" class="tab">
@@ -265,6 +389,20 @@
           <h3>Installed Models</h3>
           <div id="llmModels" class="model-list muted">Check status to view installed models.</div>
         </section>
+        <section class="panel live-panel">
+          <div class="panel-title-row">
+            <div>
+              <h3>LLM Diagnostics</h3>
+              <p>Run raw checks to verify the configured model responds and follows the expected tool-call JSON format.</p>
+            </div>
+            <div class="button-row">
+              <button id="runSimpleLlmTest" class="ghost" type="button">Simple Query</button>
+              <button id="runToolLlmTest" class="ghost" type="button">Tool Format</button>
+            </div>
+          </div>
+          <div id="llmDiagnosticStatus" class="status-line"></div>
+          <div id="llmDiagnosticResult" class="llm-diagnostic-grid empty">No diagnostic run yet.</div>
+        </section>
       </section>
 
       <section id="tab-outputs" class="tab">
@@ -314,6 +452,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260428-agent-suggestions-bottom"></script>
+  <script src="/static/app.js?v=20260502-opportunity-map"></script>
 </body>
 </html>
